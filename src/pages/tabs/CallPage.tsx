@@ -19,7 +19,7 @@ interface PendingFile { name: string }
  * derecha = escritura + clip para adjuntar.
  */
 export const CallPage: React.FC = () => {
-    const { state } = useApp();
+    const { state, dispatch } = useApp();
     const style = state.callStyle;
     const [muted, setMuted] = useState(false);
     const [text, setText] = useState('');
@@ -84,6 +84,17 @@ export const CallPage: React.FC = () => {
     // cae al nivel del microfono del usuario.
     const lvl = muted ? 0 : Math.max(aiLevel, level * 0.6);
     const barBoost = 0.35 + lvl * 1.1;
+
+    // Colgar: detiene micrófono/escucha, limpia la llamada y vuelve al chat.
+    const colgar = () => {
+        if (listening) { setListening(false); void stopMicRecording().catch(() => {}); }
+        recRef.current?.stop();
+        setHistory([]);
+        setText('');
+        setPending(null);
+        setNote('Llamada terminada.');
+        dispatch({ type: 'set-tab', tab: 'chat' });
+    };
 
     const dictar = async () => {
         if (!permEnabled('mic')) { setNote('Micrófono bloqueado: actívalo en Sistema → Permisos.'); return; }
@@ -313,7 +324,7 @@ export const CallPage: React.FC = () => {
                     <button type="button" onClick={probarVoz} className={ctrlBtn()} aria-label="Altavoz" title="Probar voz (TTS)">
                         <Volume2 size={18} />
                     </button>
-                    <button type="button" className={ctrlBtn(false, true)} aria-label="Colgar" title="Colgar">
+                    <button type="button" onClick={colgar} className={ctrlBtn(false, true)} aria-label="Colgar" title="Colgar">
                         <PhoneOff size={18} />
                     </button>
                 </div>

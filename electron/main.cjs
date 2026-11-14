@@ -83,7 +83,8 @@ function createWindow() {
     });
 
     mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-        shell.openExternal(url);
+        // Solo http(s) sale al navegador del sistema; file:/javascript:/etc no.
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url);
         return { action: 'deny' };
     });
 
@@ -99,9 +100,18 @@ function createWindow() {
 
     // Anti-navegación: el frame principal nunca sale de la app. Sin esto, una
     // redirección/XSS podría cargar una página remota CON acceso a window.joyai.
+    // file:// solo se permite dentro del directorio de la app (no cualquier HTML local).
+    const allowedNav = (url) => {
+        if (isDev && url.startsWith('http://localhost:3000')) return true;
+        if (!url.startsWith('file://')) return false;
+        try {
+            const p = decodeURIComponent(new URL(url).pathname).replace(/^\/([A-Za-z]:)/, '$1');
+            const root = app.getAppPath();
+            return p === root || p.startsWith(root + path.sep);
+        } catch { return false; }
+    };
     mainWindow.webContents.on('will-navigate', (e, url) => {
-        const ok = url.startsWith('file://') || (isDev && url.startsWith('http://localhost:3000'));
-        if (!ok) e.preventDefault();
+        if (!allowedNav(url)) e.preventDefault();
     });
 
     // Permisos del renderer: solo micrófono/cámara (voz y llamada). El resto
@@ -201,6 +211,16 @@ function createIslandWindow() {
     islandWindow.setAlwaysOnTop(true, 'floating');
     islandWindow.setVisibleOnAllWorkspaces?.(true);
     islandWindow.loadURL(islandPageUrl());
+    // La isla usa el mismo preload (window.joyai): mismos guardas que la ventana
+    // principal — sin esto un navigate/popups en la isla tendrían acceso IPC.
+    islandWindow.webContents.on('will-navigate', (e, url) => {
+        const ok = url.startsWith('file://') || (isDev && url.startsWith('http://localhost:3000'));
+        if (!ok) e.preventDefault();
+    });
+    islandWindow.webContents.setWindowOpenHandler(({ url }) => {
+        if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+        return { action: 'deny' };
+    });
     islandWindow.on('closed', () => { islandWindow = null; });
 }
 
@@ -322,6 +342,13 @@ async function handleAiRequest(payload) {
     const temperature = typeof payload?.temperature === 'number' ? payload.temperature : undefined;
 
     if (!/^https?:\/\//.test(endpoint)) return { ok: false, error: 'endpoint invalido' };
+
+    // Las API keys NUNCA viajan por HTTP plano a un host externo: solo se
+    // permite http:// en loopback (Ollama/LM Studio/vLLM locales).
+    const isLocal = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(endpoint);
+    if (apiKey && /^http:\/\//i.test(endpoint) && !isLocal) {
+        return { ok: false, error: 'endpoint inseguro: las API keys solo viajan por HTTPS (http solo en local)' };
+    }
 
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
@@ -1161,12 +1188,17 @@ ipcMain.handle('link:share-start', (_e, payload) => {
         const authCode = url.searchParams.get('code') ?? req.headers['x-link-code'] ?? '';
 
         if (url.pathname === '/info' && req.method === 'GET') {
+            // /info también exige el código: sin él un equipo de la LAN podría
+            // sondear nombre/plataforma del host sin autorización.
+            if (!shareState.code || authCode !== shareState.code) { res.writeHead(403); res.end(); return; }
             res.writeHead(200, { 'content-type': 'application/json', 'access-control-allow-origin': '*' });
             res.end(JSON.stringify({ name: shareState.name, platform: process.platform, sharing: shareState.sharing }));
             return;
         }
         if (url.pathname === '/frame' && req.method === 'GET') {
-            if (!shareState.sharing || authCode !== shareState.code) { res.writeHead(403); res.end(); return; }
+            // El código debe existir Y coincidir: antes, código vacío + sin
+            // parámetro pasaba la comparación ('' === '') y abría los frames.
+            if (!shareState.sharing || !shareState.code || authCode !== shareState.code) { res.writeHead(403); res.end(); return; }
             if (!shareState.lastFrame) { res.writeHead(204); res.end(); return; }
             res.writeHead(200, { 'content-type': 'image/jpeg', 'access-control-allow-origin': '*' });
             res.end(shareState.lastFrame);

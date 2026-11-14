@@ -22,7 +22,14 @@ export interface LinkedDevice {
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sin 0/O/1/I ambiguos
 
 function randomCode(): string {
-    const seg = () => Array.from({ length: 4 }, () => ALPHABET[Math.floor(Math.random() * ALPHABET.length)]).join('');
+    // crypto.getRandomValues: el código autoriza ver pantalla y archivos en LAN;
+    // Math.random no es criptográficamente seguro.
+    const rand = (n: number) => {
+        const buf = new Uint32Array(1);
+        crypto.getRandomValues(buf);
+        return buf[0] % n;
+    };
+    const seg = () => Array.from({ length: 4 }, () => ALPHABET[rand(ALPHABET.length)]).join('');
     return `CARO-${seg()}-${seg()}`;
 }
 

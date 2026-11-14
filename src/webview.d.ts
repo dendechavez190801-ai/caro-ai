@@ -11,7 +11,7 @@ declare module 'react' {
                 React.HTMLAttributes<HTMLElement> & {
                     src?: string;
                     partition?: string;
-                    allowpopups?: boolean;
+                    allowpopups?: boolean | string;
                 },
                 HTMLElement
             > & {

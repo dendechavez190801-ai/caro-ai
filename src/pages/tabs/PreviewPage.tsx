@@ -138,10 +138,21 @@ export const PreviewPage: React.FC = () => {
         wv.addEventListener('did-start-loading', onStart);
         wv.addEventListener('did-stop-loading', onStop);
         wv.addEventListener('did-fail-load', onFail as EventListener);
+        // Popups: solo http(s) navegan dentro del mismo webview; otros
+        // esquemas (file:, javascript:, data:) se descartan.
+        const onNewWindow = (e: unknown) => {
+            const ev = e as { url?: string; preventDefault?: () => void };
+            ev.preventDefault?.();
+            if (ev.url && /^https?:\/\//i.test(ev.url)) {
+                (wv as unknown as { loadURL?: (u: string) => void }).loadURL?.(ev.url);
+            }
+        };
+        wv.addEventListener('new-window', onNewWindow as EventListener);
         return () => {
             wv.removeEventListener('did-start-loading', onStart);
             wv.removeEventListener('did-stop-loading', onStop);
             wv.removeEventListener('did-fail-load', onFail as EventListener);
+            wv.removeEventListener('new-window', onNewWindow as EventListener);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [state.previewUrl]);
@@ -191,7 +202,7 @@ export const PreviewPage: React.FC = () => {
                             ref={(el) => { webviewRef.current = el as unknown as HTMLElement | null; }}
                             src={state.previewUrl ?? 'about:blank'}
                             partition="persist:caro-preview"
-                            allowpopups
+                            allowpopups={'true' as unknown as boolean}
                             className="w-full h-full bg-white"
                         />
                         {pageLoading && (

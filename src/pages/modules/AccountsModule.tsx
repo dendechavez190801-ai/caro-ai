@@ -131,7 +131,8 @@ export const AccountsModule: React.FC = () => {
             // Los popups navegan dentro del mismo webview, no en ventanas sueltas.
             const ev = e as Event & { url?: string; preventDefault?: () => void };
             ev.preventDefault?.();
-            if (ev.url) {
+            // Solo http(s): evita que un popup cargue file:/javascript:/data:.
+            if (ev.url && /^https?:\/\//i.test(ev.url)) {
                 setUrlBar(ev.url);
                 const wv = el as unknown as { loadURL?: (url: string) => void };
                 try { wv.loadURL?.(ev.url); } catch { /* noop */ }
@@ -285,7 +286,7 @@ export const AccountsModule: React.FC = () => {
                         ref={attachWebview}
                         src={session.url}
                         partition={session.partition}
-                        allowpopups
+                        allowpopups={'true' as unknown as boolean}
                         useragent={CHROME_UA}
                         className="w-full h-[440px] rounded-xl border border-white/10 bg-white"
                     />

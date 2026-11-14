@@ -388,8 +388,11 @@ export async function runAction(a: AgentAction): Promise<{ ok: boolean; error?: 
             const have = devices.map((d) => d.name).join(', ') || 'ninguno';
             return { ok: false, error: `No hay dispositivo "${a.device}" en Control por SSH. Configurados: ${have}. Agrégalo en Dispositivos.` };
         }
+        // Sanitiza: nada de comillas/saltos que rompan el comando remoto.
+        const safeTarget = a.target.replace(/["`\r\n]/g, '').slice(0, 300).trim();
+        if (!safeTarget) return { ok: false, error: 'objetivo remoto vacío' };
         // 'start' abre tanto URLs como apps por nombre en un Windows remoto.
-        const remoteCmd = `start "" "${a.target}"`;
+        const remoteCmd = `start "" "${safeTarget}"`;
         const r = await ssh({ host: dev.host, user: dev.user, port: dev.port, command: remoteCmd })
             .catch((e): { ok: boolean; error?: string } => ({ ok: false, error: String(e) }));
         if (!r.ok) return { ok: false, error: `SSH a ${dev.name} falló: ${r.error ?? 'sin detalle'}` };

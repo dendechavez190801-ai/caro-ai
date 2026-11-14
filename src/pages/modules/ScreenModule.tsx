@@ -122,8 +122,10 @@ export const ScreenModule: React.FC = () => {
     const startProjection = (d: LinkedDevice) => {
         // La conexión real es por IP + código en "Ver pantalla de otro equipo".
         // Aquí solo preparamos el formulario y avisamos — nada se simula.
+        setProjecting(d.id);
         setJoinCode('');
         setNote(`Para ver "${d.name}": arriba en "Ver pantalla de otro equipo" escribe su IP y su código ${d.code}. Si aún no lo tienes, pídeselo en ese equipo.`);
+        setTimeout(() => setProjecting((p) => (p === d.id ? null : p)), 1600);
     };
 
     return (
