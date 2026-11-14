@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Mic, Volume2, PhoneOff, Paperclip, Send, X } from 'lucide-react';
 import { useApp } from '../../store';
 import { startListening } from '../../voice';
-import { speak, startMicRecording, stopMicRecording, transcribeBlob, PIPER_VOICES } from '../../speech';
+import { speak, startMicRecording, stopMicRecording, transcribeBlob, PIPER_VOICES, onSpeakLevel } from '../../speech';
+import { chatCompletion } from '../../ai';
+import { APP_CONTEXT, AGENT_ACTIONS_HINT, detectActions, runAction, parseAgentActions } from '../../agent';
 import { AttachMenu, Attachment } from '../../components/AttachMenu';
 import { permEnabled } from '../../permissions';
 
@@ -24,8 +26,11 @@ export const CallPage: React.FC = () => {
     const [note, setNote] = useState('');
     const [listening, setListening] = useState(false);
     const [pending, setPending] = useState<PendingFile | null>(null);
+    const [history, setHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+    const [busy, setBusy] = useState(false);
     const recRef = useRef<{ stop: () => void } | null>(null);
     const [level, setLevel] = useState(0);
+    const [aiLevel, setAiLevel] = useState(0);
 
     const selectedAvatar = state.avatars.find((a) => a.id === state.avatarId);
     const voiceFile = PIPER_VOICES.find((v) => v.file === state.ttsVoiceId)?.file ?? state.ttsVoiceId;
@@ -72,7 +77,12 @@ export const CallPage: React.FC = () => {
         };
     }, []);
 
-    const lvl = muted ? 0 : level; // nivel efectivo (0-1)
+    // Nivel de la voz de la IA (TTS local medido con Web Audio).
+    useEffect(() => onSpeakLevel(setAiLevel), []);
+
+    // El visualizador reacciona a la voz de la IA; si esta en silencio,
+    // cae al nivel del microfono del usuario.
+    const lvl = muted ? 0 : Math.max(aiLevel, level * 0.6);
     const barBoost = 0.35 + lvl * 1.1;
 
     const dictar = async () => {
@@ -112,14 +122,62 @@ export const CallPage: React.FC = () => {
         if (att.kind === 'link' && !text.trim()) setText(`Abre ${att.name}`);
     };
 
-    const send = () => {
+    // Motor activo: mismo criterio que Chat (locales siempre; nube con key).
+    const usableEngines = state.engines.filter((e) =>
+        e.enabled && (
+            ['ollama', 'lmstudio', 'vllm'].includes(e.providerType)
+            || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(e.endpoint)
+            || !!e.apiKey
+        ));
+    const activeEngine = usableEngines[0] ?? state.engines.find((e) => e.enabled) ?? state.engines[0];
+
+    const send = async () => {
         const t = text.trim();
-        if (!t && !pending) return;
+        if ((!t && !pending) || busy) return;
         const withFile = pending ? `${t ? t + ' ' : ''}[archivo: ${pending.name}]` : t;
         setText('');
         setPending(null);
-        setNote(`Enviado a ${state.agentName}: "${withFile.slice(0, 60)}${withFile.length > 60 ? '…' : ''}"`);
-        void speak(`Recibido.`, voiceFile).catch(() => {});
+        setBusy(true);
+        const next = [...history, { role: 'user' as const, content: withFile }];
+        setHistory(next);
+
+        // Acciones directas ("abre X", "minimiza", "isla") — igual que Avatar/Chat.
+        const directs = detectActions(t);
+        if (directs.length) {
+            const replies: string[] = [];
+            for (const a of directs) {
+                const r = await runAction(a).catch((e) => ({ ok: false as const, error: String(e) }));
+                replies.push(r.ok ? `Listo, ${a.label}.` : `No pude ${a.label}.`);
+            }
+            const reply = replies.join(' ');
+            setHistory((h) => [...h, { role: 'assistant', content: reply }]);
+            setNote(reply);
+            void speak(reply, voiceFile).catch(() => {});
+            setBusy(false);
+            return;
+        }
+
+        if (!activeEngine) {
+            setNote('No hay motor de IA configurado. Revisa Modelos.');
+            setBusy(false);
+            return;
+        }
+        try {
+            const reply = await chatCompletion(activeEngine, [
+                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} atiende una LLAMADA DE VOZ con el usuario: responde corto, natural y hablable (1-3 frases), sin markdown ni listas — esto se convierte a voz.\n${AGENT_ACTIONS_HINT}` },
+                ...next,
+            ]);
+            const parsed = parseAgentActions(reply);
+            const spoken = parsed.text || reply;
+            setHistory((h) => [...h, { role: 'assistant', content: spoken }]);
+            setNote(spoken.slice(0, 90));
+            void speak(spoken.slice(0, 600), voiceFile).catch(() => {});
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'error';
+            setNote(`No pude responder (${msg}). Revisa Modelos e IA.`);
+        } finally {
+            setBusy(false);
+        }
     };
 
     const ctrlBtn = (active = false, danger = false) =>

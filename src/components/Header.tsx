@@ -16,14 +16,13 @@ export const Header: React.FC = () => {
     const [floatOn, setFloatOn] = useState(false);
     const bellRef = useRef<HTMLDivElement>(null);
 
-    // Estado inicial del modo isla (ventana flotante siempre visible).
+    // Estado inicial de la isla dinámica (ventana compacta siempre visible).
     useEffect(() => {
-        window.joyai?.getFloatMode?.().then((r) => { if (r.ok) setFloatOn(r.on); }).catch(() => {});
+        window.joyai?.islandStatus?.().then((r) => { if (r.ok) setFloatOn(r.on); }).catch(() => {});
     }, []);
 
     const toggleFloat = async () => {
-        const next = !floatOn;
-        const r = await window.joyai?.setFloatMode?.(next).catch(() => null);
+        const r = await window.joyai?.islandToggle?.().catch(() => null);
         if (r?.ok) setFloatOn(r.on);
     };
 

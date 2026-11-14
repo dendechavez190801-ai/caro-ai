@@ -130,7 +130,7 @@ export async function chatCompletion(
     if (ipc) {
         const r = await ipc({
             endpoint: engine.endpoint,
-            apiKey: engine.apiKey,
+            apiKey: engine.apiKey?.trim() || undefined,
             providerType: engine.providerType,
             model: engine.model,
             messages,
@@ -160,7 +160,7 @@ export async function checkEngineHealth(engine: AIEngineConfig): Promise<EngineH
     if (ipc) {
         const r = await ipc({
             endpoint: engine.endpoint,
-            apiKey: engine.apiKey,
+            apiKey: engine.apiKey?.trim() || undefined,
             providerType: engine.providerType,
             model: engine.model,
             health: true,

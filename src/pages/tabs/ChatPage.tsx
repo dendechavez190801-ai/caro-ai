@@ -1,11 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Paperclip, Mic, Send, Plus, X, BookOpen, Download } from 'lucide-react';
 import { useApp } from '../../store';
-import { chatCompletion } from '../../ai';
+import { chatCompletion, checkEngineHealth } from '../../ai';
 import { startMicRecording, stopMicRecording, transcribeBlob } from '../../speech';
-import { ChatSession, saveSession, sessionTitle } from '../../chats';
+import { ChatSession, saveSession, sessionTitle, loadSessions } from '../../chats';
 import { createNote, loadNotes, saveNotes, downloadText, searchNotes } from '../../vault';
-import { detectAction, runAction, AGENT_ACTIONS_HINT, parseAgentActions, AgentAction, previewUrlForAction } from '../../agent';
+import { detectActions, runAction, AGENT_ACTIONS_HINT, APP_CONTEXT, parseAgentActions, AgentAction, previewUrlForAction } from '../../agent';
 import { AttachMenu, Attachment } from '../../components/AttachMenu';
 import { AGENT_TONES, loadToneIndex } from '../../agentTone';
 
@@ -32,19 +32,55 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 export const ChatPage: React.FC = () => {
     const { state, dispatch } = useApp();
-    const [msgs, setMsgs] = useState<Msg[]>([
-        { role: 'assistant', text: `Hola, soy ${state.agentName}. ¿En qué te ayudo?` },
-    ]);
+    // Restaura la conversación más reciente: antes cada apertura creaba un
+    // sessionId nuevo y el chat "desaparecía" aunque sí se guardaba en disco.
+    const [sessionId, setSessionId] = useState(() => loadSessions()[0]?.id ?? `chat-${Date.now()}`);
+    const [msgs, setMsgs] = useState<Msg[]>(() => {
+        const last = loadSessions()[0];
+        if (last?.messages?.length) {
+            return last.messages.map((m) => ({ role: m.role, text: m.text }));
+        }
+        return [{ role: 'assistant', text: `Hola, soy ${state.agentName}. ¿En qué te ayudo?` }];
+    });
     const [text, setText] = useState('');
     const [pendingAttach, setPendingAttach] = useState<Attachment | null>(null);
     const [engineId, setEngineId] = useState('');
     const [loading, setLoading] = useState(false);
     const [recording, setRecording] = useState(false);
-    const [sessionId, setSessionId] = useState(() => `chat-${Date.now()}`);
     const listRef = useRef<HTMLDivElement>(null);
 
     const engines = state.engines;
-    const activeEngine = engines.find((e) => e.id === engineId) ?? engines.find((e) => e.enabled) ?? engines[0];
+    // Motores realmente usables: locales siempre; de nube solo con API key.
+    // Sin esto el selector mostraba proveedores deshabilitados con modelos
+    // que no existen (nombres de plantilla) y el chat fallaba con 404.
+    const usableEngines = engines.filter((e) =>
+        e.enabled && (
+            ['ollama', 'lmstudio', 'vllm'].includes(e.providerType)
+            || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(e.endpoint)
+            || !!e.apiKey
+        ));
+    const activeEngine = engines.find((e) => e.id === engineId)
+        ?? usableEngines[0]
+        ?? engines.find((e) => e.enabled)
+        ?? engines[0];
+
+    // Auto-reparacion: si el motor local activo tiene un modelo que NO esta
+    // instalado (ej. el default 'qwen2.5:3b' cuando solo bajaste otros), se
+    // cambia solo al primer modelo instalado que reporta el servidor.
+    useEffect(() => {
+        if (!activeEngine) return;
+        const isLocal = ['ollama', 'lmstudio', 'vllm'].includes(activeEngine.providerType)
+            || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(activeEngine.endpoint);
+        if (!isLocal || !activeEngine.endpoint) return;
+        let cancelled = false;
+        void checkEngineHealth(activeEngine).then((h) => {
+            if (cancelled || !h.ok || !h.models.length) return;
+            if (!h.models.includes(activeEngine.model)) {
+                dispatch({ type: 'update-engine', id: activeEngine.id, patch: { model: h.models[0] } });
+            }
+        }).catch(() => {});
+        return () => { cancelled = true; };
+    }, [activeEngine?.id, activeEngine?.endpoint, activeEngine?.model, dispatch]);
 
     // Autoscroll al último mensaje.
     useEffect(() => {
@@ -53,10 +89,11 @@ export const ChatPage: React.FC = () => {
 
     // Persistencia local del chat (archivo de conversaciones en este equipo).
     useEffect(() => {
+        const existing = loadSessions().find((s) => s.id === sessionId);
         const session: ChatSession = {
             id: sessionId,
             title: sessionTitle(msgs.map((m) => ({ role: m.role, text: m.text })), `Chat ${state.agentName}`),
-            createdAt: Date.now(),
+            createdAt: existing?.createdAt ?? Date.now(),
             updatedAt: Date.now(),
             messages: msgs.map((m) => ({ role: m.role, text: m.text })),
         };
@@ -119,28 +156,28 @@ export const ChatPage: React.FC = () => {
         setPendingAttach(null);
         setLoading(true);
 
-        // Acción local del agente (abrir app/archivo/búsqueda) — nivel 1.
-        const action = detectAction(t);
-        if (action) {
-            // Acciones web (url/search/sitios como YouTube/TikTok) se abren en Vista Previa.
-            const prev = previewUrlForAction(action);
-            if (prev) {
-                dispatch({ type: 'set-preview-url', url: prev });
-                dispatch({ type: 'set-tab', tab: 'preview' });
-                setMsgs((m) => [...m, {
-                    role: 'assistant',
-                    text: `✓ Abrí ${action.label} en Vista Previa.`,
-                }]);
-                setLoading(false);
-                return;
+        // Acciones locales del agente (abrir app/archivo/búsqueda/ventana).
+        const actions = detectActions(t);
+        if (actions.length) {
+            const replies: string[] = [];
+            for (const action of actions) {
+                // Vista Previa SOLO si el usuario la pidió ("en vista previa",
+                // "dentro de la app"); si no, url/search abren en el navegador
+                // real del sistema vía osOpen.
+                const prev = action.inApp ? previewUrlForAction(action) : null;
+                if (prev) {
+                    dispatch({ type: 'set-preview-url', url: prev });
+                    dispatch({ type: 'set-tab', tab: 'preview' });
+                    replies.push(`✓ Abrí ${action.label} en Vista Previa.`);
+                    continue;
+                }
+                const r = await runAction(action);
+                const detail = r.output ? `\n${r.output.slice(0, 800)}` : '';
+                replies.push(r.ok
+                    ? `✓ Ejecuté: ${action.label}.${action.type === 'shot' && r.output ? ` Guardada en: ${r.output}` : detail}`
+                    : `Intenté ${action.label} pero falló (${r.error ?? 'sin detalle'}).`);
             }
-            const r = await runAction(action);
-            setMsgs((m) => [...m, {
-                role: 'assistant',
-                text: r.ok
-                    ? `✓ Ejecuté: ${action.label}.`
-                    : `Intenté ${action.label} pero falló (${r.error ?? 'sin detalle'}).`,
-            }]);
+            setMsgs((m) => [...m, { role: 'assistant', text: replies.join('\n') }]);
             setLoading(false);
             return;
         }
@@ -154,7 +191,7 @@ export const ChatPage: React.FC = () => {
                 : '';
             const tonePrompt = AGENT_TONES[loadToneIndex()]?.prompt ?? '';
             const reply = await chatCompletion(activeEngine, [
-                { role: 'system', content: `${state.agentName} es un asistente personal.${tonePrompt ? ` ${tonePrompt}` : ''}${AGENT_ACTIONS_HINT}${vaultCtx}` },
+                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} es el asistente personal de este usuario dentro de CaRo Ai.${tonePrompt ? ` ${tonePrompt}` : ''}\n${AGENT_ACTIONS_HINT}${vaultCtx}` },
                 ...next.map((m) => ({ role: m.role, content: m.text })),
             ]);
             // Tool-calling nivel 2: la IA propone acciones; el usuario confirma.
@@ -209,14 +246,14 @@ export const ChatPage: React.FC = () => {
                     <p className="text-xs text-neutral-500">Chat con {state.agentName}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                    {engines.length > 0 && (
+                    {usableEngines.length > 0 && (
                         <select
                             value={activeEngine?.id ?? ''}
                             onChange={(e) => setEngineId(e.target.value)}
                             className="px-2 py-1.5 rounded-lg bg-[#141414] border border-white/10 text-[11px] text-neutral-300 outline-none focus:border-[rgb(var(--accent)/0.5)] max-w-[140px]"
                             title="Motor de IA"
                         >
-                            {engines.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+                            {usableEngines.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
                         </select>
                     )}
                     <button
@@ -256,7 +293,7 @@ export const ChatPage: React.FC = () => {
                 } : undefined}
             >
                 {msgs.map((m, i) => (
-                    <div key={i} className="flex flex-col gap-1.5 max-w-[85%] sm:max-w-[70%]">
+                    <div key={i} className={`flex flex-col gap-1.5 max-w-[85%] sm:max-w-[70%] ${m.role === 'user' ? 'self-end items-end' : 'self-start items-start'}`}>
                         {m.attachment && (
                             <div className={`flex items-center gap-2 rounded-xl border px-3 py-1.5 text-[11px] ${m.role === 'user' ? 'self-end border-white/20 bg-white/10 text-white/80' : 'self-start border-white/10 bg-white/5 text-neutral-400'}`}>
                                 <Paperclip size={11} />
@@ -331,14 +368,14 @@ export const ChatPage: React.FC = () => {
                 >
                     <Mic size={18} />
                 </button>
-                {engines.length > 1 && activeEngine && (
+                {usableEngines.length > 1 && activeEngine && (
                     <select
                         value={activeEngine.id}
                         onChange={(e) => setEngineId(e.target.value)}
                         title={`Proveedor/modelo activo: ${PROVIDER_LABELS[activeEngine.providerType] ?? activeEngine.providerType} · ${activeEngine.model}`}
                         className="shrink-0 max-w-[180px] px-2 py-1.5 rounded-lg bg-white/[0.04] border border-white/10 text-[10px] text-neutral-400 outline-none focus:border-[rgb(var(--accent)/0.5)] truncate"
                     >
-                        {engines.map((e) => (
+                        {usableEngines.map((e) => (
                             <option key={e.id} value={e.id} className="bg-neutral-900">
                                 {PROVIDER_LABELS[e.providerType] ?? e.providerType} · {e.model}
                             </option>

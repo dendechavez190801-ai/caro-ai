@@ -5,6 +5,9 @@ import { chatCompletion } from '../../ai';
 import { getSystemInfo, SystemInfo } from '../../system';
 import { speak, PIPER_VOICES, startMicRecording, stopMicRecording, transcribeBlob } from '../../speech';
 import { AttachMenu, Attachment } from '../../components/AttachMenu';
+import { AGENT_ACTIONS_HINT, APP_CONTEXT, detectActions, runAction, parseAgentActions } from '../../agent';
+import { AGENT_TONES, loadToneIndex } from '../../agentTone';
+import { searchNotes, loadNotes } from '../../vault';
 import iconUrl from '../../assets/icon.jpg';
 import { resolveAvatarScene } from '../../avatarScenes';
 
@@ -69,11 +72,43 @@ export const AvatarPage: React.FC = () => {
         setAttachName(null);
         setLoading(true);
         try {
-            const engine = state.engines.find((e) => e.enabled) ?? state.engines[0];
+            const usable = state.engines.filter((e) =>
+                e.enabled && (
+                    ['ollama', 'lmstudio', 'vllm'].includes(e.providerType)
+                    || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(e.endpoint)
+                    || !!e.apiKey
+                ));
+            const engine = usable[0] ?? state.engines.find((e) => e.enabled) ?? state.engines[0];
             if (!engine) throw new Error('No hay motor configurado');
-            const reply = await chatCompletion(engine, next.map((m) => ({ role: m.role, content: m.text })));
-            setMsgs((m) => [...m, { role: 'assistant', text: reply }]);
-            void speak(reply.slice(0, 300), voiceFile).catch(() => {});
+            // Mismo cerebro que el chat: prompt del agente con acciones,
+            // tono del usuario, contexto de la bóveda y parseo de acciones.
+            const tonePrompt = AGENT_TONES[loadToneIndex()]?.prompt ?? '';
+            const relevant = searchNotes(loadNotes(), t, 4);
+            const vaultCtx = relevant.length
+                ? `\n\nNotas relevantes de la bóveda del usuario:\n${relevant.map((n) => `- ${n.title}: ${n.content.slice(0, 300)}`).join('\n')}`
+                : '';
+            // Acciones directas del usuario ("abre X", "busca Y", ventana) — igual que en Chat.
+            const directs = detectActions(t);
+            if (directs.length) {
+                const replies: string[] = [];
+                for (const direct of directs) {
+                    const r = await runAction(direct).catch((e) => ({ ok: false as const, error: String(e) }));
+                    replies.push(r.ok
+                        ? `✓ Ejecuté: ${direct.label}.`
+                        : `Intenté ${direct.label} pero falló (${r.error ?? 'sin detalle'}).`);
+                }
+                const reply = replies.join('\n');
+                setMsgs((m) => [...m, { role: 'assistant', text: reply }]);
+                void speak(reply.slice(0, 300), voiceFile).catch(() => {});
+                return;
+            }
+            const reply = await chatCompletion(engine, [
+                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} es el asistente personal de este usuario dentro de CaRo Ai, ahora con avatar visible.${tonePrompt ? ` ${tonePrompt}` : ''}\n${AGENT_ACTIONS_HINT}${vaultCtx}` },
+                ...next.map((m) => ({ role: m.role, content: m.text })),
+            ]);
+            const parsed = parseAgentActions(reply);
+            setMsgs((m) => [...m, { role: 'assistant', text: parsed.text || reply }]);
+            void speak((parsed.text || reply).slice(0, 300), voiceFile).catch(() => {});
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'error';
             setMsgs((m) => [...m, { role: 'assistant', text: `No pude responder (${msg}).` }]);

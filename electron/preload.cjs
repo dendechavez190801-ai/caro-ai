@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('joyai', {
     /** Modo isla: ventana siempre visible encima de todo. */
     setFloatMode: (on) => ipcRenderer.invoke('win:float', { on }),
     getFloatMode: () => ipcRenderer.invoke('win:float-status'),
+    minimizeWindow: () => ipcRenderer.invoke('win:minimize'),
+    islandToggle: () => ipcRenderer.invoke('island:toggle'),
+    islandStatus: () => ipcRenderer.invoke('island:status'),
+    islandRestore: () => ipcRenderer.invoke('island:restore'),
 
     getSystemInfo: () => ipcRenderer.invoke('get-system-info'),
 
@@ -75,6 +79,9 @@ contextBridge.exposeInMainWorld('joyai', {
 
     /** Abre apps/archivos/URLs del usuario (acciones del agente). */
     osOpen: (payload) => ipcRenderer.invoke('os:open', payload),
+
+    /** Inventario de apps instaladas en la máquina (registro de Windows). */
+    systemApps: () => ipcRenderer.invoke('system:apps'),
 
     /** Puente de agentes local: id/token únicos por instalación (127.0.0.1). */
     bridgeInfo: () => ipcRenderer.invoke('bridge:info'),

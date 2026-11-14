@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Cpu, MemoryStick, HardDrive, Battery, Monitor, Sparkles, RefreshCw } from 'lucide-react';
-import { Section, Card, Metric, Bar, DemoBadge } from '../../components/ui';
+import { Cpu, MemoryStick, HardDrive, Battery, Monitor, RefreshCw } from 'lucide-react';
+import { Section, Card, Metric, Bar } from '../../components/ui';
 import { getSystemInfo, SystemInfo } from '../../system';
 
 function fmtGB(n: number): string {
@@ -59,14 +59,9 @@ export const HardwareModule: React.FC = () => {
                 </div>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                     <p className="text-[11px] text-neutral-500 flex items-center gap-1.5"><Monitor size={12} /> <Battery size={12} /> {info ? `Datos ${info.isElectron ? 'reales de Electron' : 'web (estimados)'} · ${info.osName} · se actualiza solo` : 'Leyendo hardware…'}</p>
-                    <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => getSystemInfo().then(setInfo).catch(() => {})} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-neutral-300 border border-white/10 hover:border-white/20 transition-colors">
-                            <RefreshCw size={13} /> Actualizar
-                        </button>
-                        <button type="button" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold text-[rgb(var(--accent-contrast))] bg-[rgb(var(--accent))] hover:opacity-90 transition-opacity">
-                            <Sparkles size={14} /> Optimizar <DemoBadge />
-                        </button>
-                    </div>
+                    <button type="button" onClick={() => getSystemInfo().then(setInfo).catch(() => {})} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium text-neutral-300 border border-white/10 hover:border-white/20 transition-colors">
+                        <RefreshCw size={13} /> Actualizar
+                    </button>
                 </div>
             </Section>
         </div>

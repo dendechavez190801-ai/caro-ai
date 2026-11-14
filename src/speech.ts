@@ -73,15 +73,66 @@ export async function getSpeechStatus(): Promise<SpeechStatus> {
     };
 }
 
-/** Reproduce audio desde WAV en base64. */
+/* ── Nivel de la voz de la IA (para visualizadores de llamada/avatar) ──
+ * Mientras suena el TTS local se expone un nivel RMS 0-1 via onSpeakLevel.
+ * La voz web (speechSynthesis) no es analizable: queda en 0.
+ */
+const speakLevelListeners = new Set<(v: number) => void>();
+export function onSpeakLevel(cb: (v: number) => void): () => void {
+    speakLevelListeners.add(cb);
+    return () => speakLevelListeners.delete(cb);
+}
+function emitSpeakLevel(v: number): void {
+    speakLevelListeners.forEach((cb) => { try { cb(v); } catch { /* noop */ } });
+}
+
+/** Reproduce audio desde WAV en base64 midiendo su volumen real. */
 function playWavBase64(wavBase64: string): Promise<void> {
     return new Promise((resolve) => {
         const bytes = Uint8Array.from(atob(wavBase64), (c) => c.charCodeAt(0));
         const url = URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
-        const audio = new Audio(url);
-        audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
-        audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
-        void audio.play();
+        const fallback = () => {
+            const audio = new Audio(url);
+            audio.onended = () => { URL.revokeObjectURL(url); resolve(); };
+            audio.onerror = () => { URL.revokeObjectURL(url); resolve(); };
+            void audio.play();
+        };
+        // Web Audio: decode + analyser para medir el volumen mientras habla.
+        const AC: typeof AudioContext | undefined =
+            window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AC) { fallback(); return; }
+        void (async () => {
+            try {
+                const ctx = new AC();
+                const ab = await ctx.decodeAudioData(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
+                const src = ctx.createBufferSource();
+                src.buffer = ab;
+                const an = ctx.createAnalyser();
+                an.fftSize = 512;
+                src.connect(an);
+                an.connect(ctx.destination);
+                const buf = new Uint8Array(an.frequencyBinCount);
+                let raf = 0;
+                const tick = () => {
+                    an.getByteTimeDomainData(buf);
+                    let sum = 0;
+                    for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+                    emitSpeakLevel(Math.min(1, Math.sqrt(sum / buf.length) * 4));
+                    raf = requestAnimationFrame(tick);
+                };
+                src.onended = () => {
+                    cancelAnimationFrame(raf);
+                    emitSpeakLevel(0);
+                    void ctx.close().catch(() => {});
+                    URL.revokeObjectURL(url);
+                    resolve();
+                };
+                tick();
+                src.start();
+            } catch {
+                fallback();
+            }
+        })();
     });
 }
 

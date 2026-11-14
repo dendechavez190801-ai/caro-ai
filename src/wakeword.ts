@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { startMicRecording, stopMicRecording, transcribeBlob } from './speech';
 
 /**
  * Wake word: escucha continua del nombre del agente mientras la app está
@@ -81,6 +82,46 @@ export function useWakeWord(enabled: boolean, agentName: string, onWake: (transc
 
         return () => {
             try { rec.onend = null; rec.abort(); } catch { /* noop */ }
+        };
+    }, [enabled, agentName]);
+
+    // Fallback whisper.cpp (Electron/Chromium no trae SpeechRecognition):
+    // grabamos chunks de ~3.5 s, los transcribimos con el whisper local y
+    // buscamos el nombre del agente. No es tan rápido como un wake-word
+    // dedicado, pero funciona 100% local y offline.
+    const whisperArmed = useRef(false);
+    useEffect(() => {
+        const Ctor = getRecognitionCtor();
+        const name = agentName.trim().toLowerCase();
+        if (!enabled || Ctor || name.length < 2 || !window.joyai?.speechStt) return;
+        if (whisperArmed.current) return;
+        whisperArmed.current = true;
+        let dead = false;
+
+        const matches = (text: string) => {
+            const t = text.toLowerCase();
+            return t.includes(name) || t.split(/\s+/).some((w) => w.replace(/[^a-záéíóúñ]/g, '') === name);
+        };
+
+        const tick = async () => {
+            if (dead) return;
+            try {
+                await startMicRecording();
+                await new Promise((r) => setTimeout(r, 3500));
+                const blob = await stopMicRecording();
+                const text = await transcribeBlob(blob);
+                if (text && matches(text) && Date.now() - lastFire.current > 8000) {
+                    lastFire.current = Date.now();
+                    onWakeRef.current(text);
+                }
+            } catch { /* sin mic o sin whisper: reintenta en el siguiente ciclo */ }
+            if (!dead) setTimeout(() => void tick(), 400);
+        };
+        void tick();
+
+        return () => {
+            dead = true;
+            whisperArmed.current = false;
         };
     }, [enabled, agentName]);
 }

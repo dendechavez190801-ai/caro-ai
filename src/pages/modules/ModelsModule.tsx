@@ -1,22 +1,33 @@
 import React, { useEffect, useState } from 'react';
-import { Cloud, KeyRound, Download, Plus, ShieldCheck, Cpu, RefreshCw, FolderSearch, FileBox } from 'lucide-react';
+import { Cloud, KeyRound, Download, Plus, RefreshCw, FolderSearch, FileBox } from 'lucide-react';
 import { Section, Card, Toggle, Pill } from '../../components/ui';
 import { useApp } from '../../store';
 import { checkEngineHealth, EngineHealth } from '../../ai';
 import { AIEngineConfig } from '../../types';
 
-// Ordenados por peso: primero los cuantizados ligeros para gama media
-// (Celulares gama media / GPU de entrada ~4 GB VRAM / solo CPU).
-const CODING_MODELS = [
-    { id: 'qwen-coder-3b', name: 'Qwen2.5-Coder 3B', ollamaTag: 'qwen2.5-coder:3b', tags: ['Código', 'General', 'Ligero'], size: '~1.9 GB', hw: 'Gama media ✓' },
-    { id: 'llama3.2-3b', name: 'Llama 3.2 3B', ollamaTag: 'llama3.2:3b', tags: ['General', 'Chat', 'Ligero'], size: '~2.0 GB', hw: 'Gama media ✓' },
-    { id: 'gemma3-4b', name: 'Gemma 3 4B', ollamaTag: 'gemma3:4b', tags: ['General', 'Multimodal', 'Ligero'], size: '~3.3 GB', hw: 'Gama media ✓' },
-    { id: 'deepseek-coder-1.3b', name: 'DeepSeek-Coder 1.3B', ollamaTag: 'deepseek-coder:1.3b', tags: ['Código', 'Muy ligero'], size: '~0.8 GB', hw: 'Celular / CPU ✓' },
-    { id: 'qwen-coder', name: 'Qwen2.5-Coder 7B', ollamaTag: 'qwen2.5-coder:7b', tags: ['Código', 'General', 'Sin censura'], size: '~4.7 GB', hw: 'GPU dedicada' },
-    { id: 'deepseek-coder', name: 'DeepSeek-Coder 6.7B', ollamaTag: 'deepseek-coder:6.7b', tags: ['Código', 'Razonamiento'], size: '~3.8 GB', hw: 'GPU dedicada' },
+const LOCAL_TYPES = new Set(['ollama', 'lmstudio', 'vllm']);
+
+/**
+ * Modelos de CHAT recomendados (instruct/generalistas). Etiquetados por peso
+ * real: 'Telefono' corre en gama media por CPU; 'PC/CPU' pide algo mas de RAM.
+ * Todos se descargan del registro publico de Ollama al equipo del usuario.
+ */
+const CHAT_MODELS = [
+    { tag: 'qwen2.5:1.5b', name: 'Qwen2.5 1.5B', size: '~1.0 GB', hw: 'Teléfono ✓', desc: 'El más ligero que conversa bien. Ideal para gama media.' },
+    { tag: 'qwen2.5:3b', name: 'Qwen2.5 3B', size: '~1.9 GB', hw: 'Teléfono/PC ✓', desc: 'Equilibrio recomendado: razona y sigue instrucciones.' },
+    { tag: 'llama3.2:3b', name: 'Llama 3.2 3B', size: '~2.0 GB', hw: 'Teléfono/PC ✓', desc: 'Alternativa sólida de Meta, buena en español.' },
+    { tag: 'qwen2.5:7b', name: 'Qwen2.5 7B', size: '~4.7 GB', hw: 'PC/CPU ✓', desc: 'Más listo; pide ~8 GB RAM libres.' },
+    { tag: 'gemma3:4b', name: 'Gemma 3 4B', size: '~3.3 GB', hw: 'PC/CPU ✓', desc: 'Multimodal: entiende imágenes además de texto.' },
+    { tag: 'phi3.5-mini', name: 'Phi-3.5 Mini', size: '~2.2 GB', hw: 'Teléfono/PC ✓', desc: 'Compacto y rápido, buen razonamiento.' },
 ];
 
-const LOCAL_TYPES = new Set(['ollama', 'lmstudio', 'vllm']);
+/**
+ * Un motor es "local" si su tipo lo es O si su endpoint apunta a localhost —
+ * instalaciones viejas pudieron guardar Ollama como 'custom' y entonces los
+ * modelos descargados nunca aparecian en la lista.
+ */
+const isLocalEngine = (e: AIEngineConfig) =>
+    LOCAL_TYPES.has(e.providerType) || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(e.endpoint);
 
 /** Adivina el proveedor por la URL base (para el proveedor personalizado). */
 function detectProviderName(url: string): string {
@@ -47,6 +58,14 @@ interface EngineCardProps {
 /** Tarjeta editable de un motor: nombre, modelo, endpoint, API key y enabled. */
 const EngineCard: React.FC<EngineCardProps> = ({ engine, onPatch, health, checking, onCheck, onSelectModel }) => {
     const isLocal = LOCAL_TYPES.has(engine.providerType);
+    // Modelos del proveedor: colapsados por defecto; al expandir se consulta
+    // el endpoint (solo tiene sentido con API key en proveedores de nube).
+    const [modelsOpen, setModelsOpen] = useState(false);
+    const toggleModels = () => {
+        const next = !modelsOpen;
+        setModelsOpen(next);
+        if (next && !health && onCheck) onCheck();
+    };
     return (
         <Card className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between gap-2">
@@ -64,7 +83,8 @@ const EngineCard: React.FC<EngineCardProps> = ({ engine, onPatch, health, checki
             {!isLocal && (
                 <label className="flex flex-col gap-1">
                     <span className="text-[10px] uppercase tracking-widest text-neutral-500">API Key</span>
-                    <input type="password" className={inputCls} value={engine.apiKey ?? ''} onChange={(e) => onPatch({ apiKey: e.target.value })} placeholder="sk-…" autoComplete="off" />
+                    <input type="password" className={inputCls} value={engine.apiKey ?? ''} onChange={(e) => onPatch({ apiKey: e.target.value.trim() })} placeholder="sk-…" autoComplete="off" />
+                    {engine.apiKey && <span className="text-[9px] text-emerald-400/80">✓ key guardada</span>}
                 </label>
             )}
             {health && (
@@ -72,33 +92,58 @@ const EngineCard: React.FC<EngineCardProps> = ({ engine, onPatch, health, checki
                     {health.ok ? `● ok · ${health.latencyMs} ms · ${health.models.length} modelos` : `○ ${health.error ?? 'sin conexión'}`}
                 </p>
             )}
-            {health?.ok && health.models.length > 0 && (
-                <div className="flex flex-col gap-1">
-                    <p className="text-[10px] uppercase tracking-widest text-neutral-600">Modelos instalados</p>
-                    <div className="flex flex-wrap gap-1">
-                        {health.models.slice(0, 12).map((m) => {
-                            const active = engine.model === m;
-                            return (
-                                <button
-                                    key={m}
-                                    type="button"
-                                    onClick={() => onSelectModel?.(m)}
-                                    title={active ? 'Modelo activo' : 'Usar este modelo'}
-                                    className={`px-2 py-0.5 rounded-md text-[10px] font-mono border transition-colors ${
-                                        active
-                                            ? 'border-[rgb(var(--accent)/0.6)] bg-[rgb(var(--accent)/0.15)] text-white'
-                                            : 'border-white/10 text-neutral-400 hover:border-white/25 hover:text-neutral-200'
-                                    }`}
-                                >
-                                    {m}
-                                </button>
-                            );
-                        })}
-                        {health.models.length > 12 && (
-                            <span className="px-2 py-0.5 text-[10px] text-neutral-600">+{health.models.length - 12}</span>
-                        )}
-                    </div>
-                </div>
+            <button
+                type="button"
+                onClick={toggleModels}
+                className="flex items-center justify-between gap-2 text-[10px] uppercase tracking-widest text-neutral-500 hover:text-neutral-300 transition-colors"
+            >
+                <span>Modelos de {engine.name}</span>
+                <span className="flex items-center gap-1 normal-case">
+                    {!isLocal && !engine.apiKey && <span className="text-[9px] text-amber-400/80 normal-case">requiere API key</span>}
+                    {checking ? 'consultando…' : modelsOpen ? '▴ ocultar' : '▾ ver'}
+                </span>
+            </button>
+            {modelsOpen && (
+            <div className="flex flex-col gap-1">
+                {!isLocal && !engine.apiKey ? (
+                    <p className="text-[10px] text-amber-400/80">Este proveedor es de nube: pega tu API key arriba para listar sus modelos.</p>
+                ) : checking ? (
+                    <p className="text-[10px] text-neutral-500">Consultando {engine.name}…</p>
+                ) : health?.ok ? (
+                    health.models.length > 0 ? (
+                        <>
+                            <p className="text-[10px] uppercase tracking-widest text-neutral-600">Modelos instalados</p>
+                            <div className="flex flex-wrap gap-1 max-h-40 overflow-y-auto pr-1">
+                                {health.models.map((m) => {
+                                    const active = engine.model === m;
+                                    return (
+                                        <button
+                                            key={m}
+                                            type="button"
+                                            onClick={() => onSelectModel?.(m)}
+                                            title={active ? 'Modelo activo' : 'Usar este modelo'}
+                                            className={`px-2 py-0.5 rounded-md text-[10px] font-mono border transition-colors ${
+                                                active
+                                                    ? 'border-[rgb(var(--accent)/0.6)] bg-[rgb(var(--accent)/0.15)] text-white'
+                                                    : 'border-white/10 text-neutral-400 hover:border-white/25 hover:text-neutral-200'
+                                            }`}
+                                        >
+                                            {m}
+                                        </button>
+                                    );
+                                })}
+                                {health.models.length > 20 && (
+                                    <span className="px-2 py-0.5 text-[10px] text-neutral-600">{health.models.length} en total — desplázate</span>
+                                )}
+                            </div>
+                        </>
+                    ) : (
+                        <p className="text-[10px] text-neutral-500">El servidor responde pero no reporta modelos.</p>
+                    )
+                ) : health ? (
+                    <p className="text-[10px] text-red-400/70">{health.error ?? 'sin respuesta'} — revisa endpoint/key.</p>
+                ) : null}
+            </div>
             )}
             {onCheck && (
                 <button
@@ -127,6 +172,11 @@ export const ModelsModule: React.FC = () => {
     const [pullInput, setPullInput] = useState('');
     /** Tag del modelo descargándose ahora ('' = ninguno). */
     const [pulling, setPulling] = useState('');
+    // Catalogos y proveedores de nube colapsados por defecto: el menu muestra
+    // primero solo lo que el usuario ya descargo; el resto se expande a pedido.
+    // Proveedores de nube visibles por defecto: es donde se pegan las API
+    // keys; esconderlos hacia parecer que no existen.
+    const [cloudOpen, setCloudOpen] = useState(true);
     const [pullMsg, setPullMsg] = useState('');
     const [pullPct, setPullPct] = useState<number | null>(null);
     const [pullLog, setPullLog] = useState('');
@@ -135,14 +185,12 @@ export const ModelsModule: React.FC = () => {
     const [scanMsg, setScanMsg] = useState('');
     const [scanModels, setScanModels] = useState<{ path: string; name: string; size: number; ext: string }[]>([]);
 
-    const ollamaEngine = state.engines.find((e) => e.providerType === 'ollama');
-    // Modelos realmente instalados en el Ollama del usuario (via /api/tags).
-    const installedModels = new Set(
-        (ollamaEngine ? health[ollamaEngine.id]?.models : undefined) ?? [],
-    );
+    const cloudEngines = state.engines.filter((e) => !isLocalEngine(e));
+    const localEngines = state.engines.filter(isLocalEngine);
 
-    const cloudEngines = state.engines.filter((e) => !LOCAL_TYPES.has(e.providerType));
-    const localEngines = state.engines.filter((e) => LOCAL_TYPES.has(e.providerType));
+    const ollamaEngine = state.engines.find((e) => e.providerType === 'ollama')
+        ?? localEngines.find((e) => /11434/.test(e.endpoint));
+    // Modelos realmente instalados en el Ollama del usuario (via /api/tags).
     const detected = baseUrl.trim() ? detectProviderName(baseUrl) : 'Personalizado';
 
     const patchEngine = (id: string, patch: Partial<AIEngineConfig>) =>
@@ -153,7 +201,31 @@ export const ModelsModule: React.FC = () => {
         const h = await checkEngineHealth(engine);
         setHealth((prev) => ({ ...prev, [engine.id]: h }));
         setCheckingId(null);
+        // Auto-reparacion: si el modelo configurado no esta instalado, se
+        // cambia al primero disponible para que Chat no falle con 404.
+        if (h.ok && h.models.length && !h.models.includes(engine.model)) {
+            // Si el motor de nube no tenia modelo ni estaba activo, lo activamos
+            // directo: el usuario solo pega la key y ya puede platicar.
+            patchEngine(engine.id, {
+                model: h.models[0],
+                ...(!engine.model || !engine.enabled ? { enabled: true } : {}),
+            });
+        }
     };
+
+    // Auto-deteccion: al pegar/cambiar la API key de un proveedor de nube, la
+    // app sola consulta sus modelos y activa el primero — sin botones extra.
+    const prevKeys = React.useRef<Record<string, string>>({});
+    useEffect(() => {
+        state.engines.forEach((e) => {
+            if (isLocalEngine(e)) return;
+            const k = e.apiKey ?? '';
+            const prev = prevKeys.current[e.id] ?? '';
+            prevKeys.current[e.id] = k;
+            if (k && k !== prev && e.endpoint.trim()) void runCheck(e);
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [state.engines]);
 
     // Comprobación automática de los servidores locales al abrir el modulo.
     useEffect(() => {
@@ -228,11 +300,12 @@ export const ModelsModule: React.FC = () => {
         setDiscovering(true);
         const h = await checkEngineHealth({
             id: 'custom-draft', name: 'borrador', providerType: 'custom',
-            endpoint: baseUrl.trim(), apiKey: apiKey || undefined, model: '', enabled: false,
+            endpoint: baseUrl.trim(), apiKey: apiKey.trim() || undefined, model: '', enabled: false,
         }).catch(() => null);
         setDiscovering(false);
         if (h?.ok && h.models.length) {
             setDiscovered(h.models);
+            setCustomModel((m) => m || h.models[0]);
             setNote(`${h.models.length} modelo(s) disponible(s). Elige uno abajo.`);
         } else {
             setDiscovered([]);
@@ -245,11 +318,17 @@ export const ModelsModule: React.FC = () => {
             setNote('Escribe la URL base del proveedor primero.');
             return;
         }
-        patchEngine('custom', {
+        // Si la URL ya pertenece a un motor conocido (OpenRouter, OpenAI...)
+        // se actualiza ESE con la key — no se crea un duplicado con el mismo
+        // nombre, que era la causa del "401 sin credenciales" en Chat.
+        const norm = (u: string) => u.trim().replace(/\/+$/, '').toLowerCase();
+        const endpoint = baseUrl.trim();
+        const existing = state.engines.find((e) => norm(e.endpoint) === norm(endpoint));
+        patchEngine(existing?.id ?? 'custom', {
             name: detected,
-            endpoint: baseUrl.trim(),
+            endpoint,
             model: customModel.trim(),
-            apiKey: apiKey || undefined,
+            apiKey: apiKey.trim() || undefined,
             enabled: true,
         });
         setNote(`Proveedor "${detected}" activado. Ya aparece en el selector del chat.`);
@@ -257,40 +336,83 @@ export const ModelsModule: React.FC = () => {
 
     return (
         <div className="flex flex-col gap-6">
-            {/* Motor de código local */}
-            <Section title="Modelos sugeridos (descargables)" desc="Catálogo de modelos locales que puedes bajar a tu Ollama. Solo aparecen como 'Instalado' los que realmente descargaste — la lista real de los tuyos está en 'Servidores locales'." demo>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {CODING_MODELS.map((m) => (
-                        <Card key={m.id} className="flex flex-col gap-3">
+            {/* TUS MODELOS — lo primero que se ve: solo lo realmente descargado
+                en los servidores locales del usuario. Nada de catalogos ni
+                proveedores de nube hasta que haya API key. */}
+            <Section
+                title="Tus modelos descargados"
+                desc="Solo modelos que YA bajaste a tu equipo (Ollama, LM Studio, vLLM). Toca uno para activarlo en Chat. Los de nube aparecen abajo solo cuando pegues tu API key."
+            >
+                {installedList.length === 0 ? (
+                    <Card className="text-center py-6">
+                        <p className="text-sm text-neutral-400">Aún no hay modelos descargados.</p>
+                        <p className="text-[11px] text-neutral-600 mt-1">Baja uno del catálogo o con <code className="font-mono">ollama pull &lt;modelo&gt;</code> en tu terminal.</p>
+                    </Card>
+                ) : (
+                    // Agrupados por fuente: cada servidor local es su seccion.
+                    Object.entries(
+                        installedList.reduce<Record<string, { engine: AIEngineConfig; models: string[] }>>((acc, { engine, model }) => {
+                            const g = acc[engine.id] ?? (acc[engine.id] = { engine, models: [] });
+                            g.models.push(model);
+                            return acc;
+                        }, {}),
+                    ).map(([engineId, { engine, models }]) => (
+                        <div key={engineId} className="mb-3 last:mb-0">
+                            <p className="text-[10px] uppercase tracking-widest text-neutral-500 mb-1.5">
+                                {engine.name} <span className="text-neutral-600 normal-case">· {models.length} modelo{models.length === 1 ? '' : 's'}</span>
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                                {models.map((model) => {
+                                    const active = engine.enabled && engine.model === model;
+                                    return (
+                                        <button
+                                            key={model}
+                                            type="button"
+                                            onClick={() => patchEngine(engine.id, { model, enabled: true })}
+                                            className={`flex items-center justify-between gap-2 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                                                active
+                                                    ? 'border-[rgb(var(--accent)/0.6)] bg-[rgb(var(--accent)/0.15)]'
+                                                    : 'border-white/10 bg-white/[0.02] hover:border-white/25'
+                                            }`}
+                                        >
+                                            <span className="text-xs font-semibold text-white font-mono truncate">{model}</span>
+                                            {active ? <Pill active>Activo</Pill> : <Pill>Usar</Pill>}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    ))
+                )}
+            </Section>
+
+            {/* Catálogo de CHAT: solo modelos instruct/generalistas que
+                razonan y siguen instrucciones — nada de modelos de código
+                ni de relleno. Se descargan al Ollama del usuario. */}
+            <Section
+                title="Para descargar — chat y asistente"
+                desc="Modelos de conversación que sí razonan y obedecen instrucciones (los de código no sirven para platicar). Se bajan a TU Ollama; nada pasa por servidores del desarrollador."
+            >
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {CHAT_MODELS.map((m) => (
+                        <Card key={m.tag} className="flex flex-col gap-2.5">
                             <div className="flex items-start justify-between gap-2">
-                                <div className="flex items-center gap-2.5">
-                                    <div className="w-9 h-9 rounded-xl bg-[rgb(var(--accent)/0.12)] border border-[rgb(var(--accent)/0.25)] flex items-center justify-center">
-                                        <Cpu size={16} className="text-[rgb(var(--accent))]" />
-                                    </div>
-                                    <div>
-                                        <p className="text-sm font-semibold text-white">{m.name}</p>
-                                        <p className="text-[10px] text-neutral-500">{m.size} · offline</p>
-                                    </div>
+                                <div>
+                                    <p className="text-sm font-semibold text-white">{m.name}</p>
+                                    <p className="text-[10px] text-neutral-500 font-mono">{m.tag} · {m.size}</p>
                                 </div>
-                                <div className="text-right">
-                                    <Pill active={installedModels.has(m.ollamaTag)}>{installedModels.has(m.ollamaTag) ? 'Instalado' : 'Descargable'}</Pill>
-                                    <p className="text-[9px] text-neutral-600 mt-1">{m.hw}</p>
-                                </div>
+                                <Pill>{m.hw}</Pill>
                             </div>
-                            <div className="flex flex-wrap gap-1.5">
-                                {m.tags.map((t) => (
-                                    <span key={t} className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-white/[0.04] border border-white/10 text-neutral-400">{t}</span>
-                                ))}
-                            </div>
+                            <p className="text-[10px] text-neutral-500">{m.desc}</p>
                             <button
                                 type="button"
-                                onClick={() => void pullModel(m.ollamaTag)}
+                                onClick={() => void pullModel(m.tag)}
                                 disabled={!!pulling}
                                 className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] font-semibold text-[rgb(var(--accent-contrast))] bg-[rgb(var(--accent))] hover:opacity-90 transition-opacity disabled:opacity-50"
                             >
-                                <Download size={13} /> {pulling === m.ollamaTag ? 'Descargando…' : 'Descargar en Ollama'}
+                                <Download size={13} /> {pulling === m.tag ? 'Descargando…' : 'Descargar'}
                             </button>
-                            {pulling === m.ollamaTag && (
+                            {pulling === m.tag && (
                                 <div>
                                     <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
                                         <div className="h-full bg-[rgb(var(--accent))] transition-all duration-500"
@@ -301,16 +423,24 @@ export const ModelsModule: React.FC = () => {
                                     </p>
                                 </div>
                             )}
-                            <p className="text-[10px] text-neutral-600 font-mono">ollama pull {m.ollamaTag}</p>
                         </Card>
                     ))}
                 </div>
-                <p className="text-[11px] text-neutral-600 mt-3 flex items-center gap-1"><ShieldCheck size={12} /> Cada usuario descarga y guarda sus modelos en su propio equipo; nada se comparte entre cuentas.</p>
-                {note && <p className="text-[11px] text-[rgb(var(--accent))] mt-2">{note}</p>}
             </Section>
 
-            {/* Proveedores en la nube: editan los motores reales del store */}
-            <Section title="Por empresa — nube (requieren tu API key)" desc="Estos NO son modelos descargables: son proveedores en la nube. Solo funcionan si pegas tu propia API key (nunca va incluida en la app).">
+            {/* Proveedores en la nube: editan los motores reales del store.
+                Colapsados por defecto — sin API key no muestran modelos. */}
+            <Section
+                title="Por empresa — nube (requieren tu API key)"
+                desc="Estos NO son modelos descargables: son proveedores en la nube. Sus modelos solo se listan al expandir cada tarjeta y con tu API key pegada."
+                right={
+                    <button type="button" onClick={() => setCloudOpen((v) => !v)}
+                        className="px-2.5 py-1 rounded-lg text-[10px] font-semibold text-neutral-300 border border-white/10 hover:border-white/25 transition-colors">
+                        {cloudOpen ? '▴ Ocultar' : '▾ Mostrar'}
+                    </button>
+                }
+            >
+                {cloudOpen && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     {cloudEngines.map((e) => (
                         <EngineCard
@@ -324,6 +454,7 @@ export const ModelsModule: React.FC = () => {
                         />
                     ))}
                 </div>
+                )}
             </Section>
 
             {/* Proveedor personalizado rapido */}
@@ -340,6 +471,33 @@ export const ModelsModule: React.FC = () => {
                             autoComplete="off"
                         />
                     </label>
+                    {/* Atajos de proveedor: llenan la URL base sola — el usuario
+                        solo pega su API key y pulsa "Listar modelos". */}
+                    <div className="sm:col-span-2 flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] uppercase tracking-widest text-neutral-600 mr-1">Proveedor:</span>
+                        {([
+                            ['OpenRouter', 'https://openrouter.ai/api/v1'],
+                            ['OpenAI', 'https://api.openai.com/v1'],
+                            ['Groq', 'https://api.groq.com/openai/v1'],
+                            ['DeepSeek', 'https://api.deepseek.com/v1'],
+                            ['Gemini', 'https://generativelanguage.googleapis.com/v1beta/openai'],
+                            ['Nvidia NIM', 'https://integrate.api.nvidia.com/v1'],
+                            ['Otro / manual', ''],
+                        ] as const).map(([name, url]) => (
+                            <button
+                                key={name}
+                                type="button"
+                                onClick={() => setBaseUrl(url)}
+                                className={`px-2.5 py-1 rounded-lg text-[10px] font-medium border transition-colors ${
+                                    baseUrl === url
+                                        ? 'border-[rgb(var(--accent)/0.6)] bg-[rgb(var(--accent)/0.15)] text-white'
+                                        : 'border-white/10 text-neutral-400 hover:border-white/25 hover:text-neutral-200'
+                                }`}
+                            >
+                                {name}
+                            </button>
+                        ))}
+                    </div>
                     <label className="flex flex-col gap-1.5">
                         <span className="text-[11px] text-neutral-400">URL base</span>
                         <input
@@ -430,41 +588,6 @@ export const ModelsModule: React.FC = () => {
                     </button>
                 </div>
                 {pullMsg && <p className="text-[11px] text-neutral-400 mb-3 font-mono">{pullMsg}</p>}
-
-                {/* Modelos realmente descargados en tus servidores locales.
-                    Esta es la lista " usable en Chat" — no el catálogo de
-                    sugeridos ni los proveedores de nube. */}
-                {installedList.length > 0 && (
-                    <div className="mb-4">
-                        <p className="text-[10px] uppercase tracking-widest text-neutral-500 mb-2">
-                            Descargados en tu equipo ({installedList.length}) — toca uno para usarlo en Chat
-                        </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                            {installedList.map(({ engine, model }) => {
-                                const active = engine.enabled && engine.model === model;
-                                return (
-                                    <button
-                                        key={`${engine.id}:${model}`}
-                                        type="button"
-                                        onClick={() => patchEngine(engine.id, { model, enabled: true })}
-                                        className={`flex items-center justify-between gap-2 px-3 py-2 rounded-xl border text-left transition-all ${
-                                            active
-                                                ? 'border-[rgb(var(--accent)/0.6)] bg-[rgb(var(--accent)/0.15)]'
-                                                : 'border-white/10 bg-white/[0.02] hover:border-white/25'
-                                        }`}
-                                    >
-                                        <div className="min-w-0">
-                                            <p className="text-xs font-semibold text-white font-mono truncate">{model}</p>
-                                            <p className="text-[9px] text-neutral-500">{engine.name}{active ? ' · activo en Chat' : ''}</p>
-                                        </div>
-                                        {active && <Pill active>Activo</Pill>}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                    </div>
-                )}
-
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                     {localEngines.map((e) => (
                         <EngineCard

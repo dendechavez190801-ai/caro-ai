@@ -79,6 +79,10 @@ declare global {
             onEnginePullDone?: (cb: (p: { model: string; ok: boolean }) => void) => () => void;
             setFloatMode?: (on: boolean) => Promise<{ ok: boolean; on: boolean }>;
             getFloatMode?: () => Promise<{ ok: boolean; on: boolean }>;
+            minimizeWindow?: () => Promise<{ ok: boolean; error?: string }>;
+            islandToggle?: () => Promise<{ ok: boolean; on: boolean }>;
+            islandStatus?: () => Promise<{ ok: boolean; on: boolean }>;
+            islandRestore?: () => Promise<{ ok: boolean }>;
             /** Ejecuta un comando en el shell del usuario (consola Terminal). */
             shellExec?: (command: string) => Promise<{ ok: boolean; output?: string; error?: string; code?: number }>;
             /** Proyección de pantalla por LAN (solo Electron). */
@@ -96,6 +100,8 @@ declare global {
             mediaConvert?: (payload: { path: string; preset: string }) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
             /** Abre apps/archivos/URLs del usuario (acciones del agente, Electron). */
             osOpen?: (payload: { type: 'app' | 'path' | 'url'; target: string }) => Promise<{ ok: boolean; error?: string }>;
+            /** Inventario de apps instaladas en la máquina (Electron). */
+            systemApps?: () => Promise<{ name: string }[]>;
             /** Puente de agentes: servidor local 127.0.0.1 con token único por instalación. */
             bridgeInfo?: () => Promise<{ id: string; token: string; port: number | null; running: boolean }>;
             bridgeStart?: () => Promise<{ ok: boolean; id?: string; token?: string; port?: number | null; running?: boolean; error?: string }>;

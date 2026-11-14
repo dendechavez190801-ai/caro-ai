@@ -306,20 +306,33 @@ function mergeEngines(saved: AIEngineConfig[] | undefined, secrets: Record<strin
     const merged = DEFAULT_ENGINES.map((def) => {
         const s = byId.get(def.id);
         const base = s ? { ...def, ...s } : { ...def };
-        // Los motores locales exponen la API OpenAI-compatible bajo /v1.
-        // Instalaciones viejas guardaron el endpoint sin /v1 y el health
-        // check (/models) fallaba → los modelos descargados no aparecían.
-        if (['ollama', 'lmstudio', 'vllm'].includes(base.providerType) && base.endpoint
-            && !/\/v1\/?$/.test(base.endpoint)) {
+        // Los servidores locales exponen la API OpenAI-compatible bajo /v1.
+        // Instalaciones viejas guardaron endpoints sin /v1 (incluso como
+        // 'custom') y el health check (/models) fallaba → los modelos
+        // descargados no aparecian. Se normaliza por tipo O por endpoint local.
+        const isKnownLocal = ['ollama', 'lmstudio', 'vllm'].includes(base.providerType);
+        const isLocalPort = /:(11434|11435|1234|8000|8080)(\/|$)/.test(base.endpoint ?? '');
+        if ((isKnownLocal || isLocalPort) && base.endpoint && !/\/v1\/?$/.test(base.endpoint)) {
             base.endpoint = base.endpoint.replace(/\/+$/, '') + '/v1';
         }
         const key = secrets[def.id];
         return key ? { ...base, apiKey: key } : base;
     });
     for (const e of saved ?? []) {
-        if (!DEFAULT_ENGINES.some((d) => d.id === e.id)) {
-            merged.push({ ...e, apiKey: secrets[e.id] });
+        if (DEFAULT_ENGINES.some((d) => d.id === e.id)) continue;
+        // Duplicados por URL: un motor extra (ej. 'custom' activado desde el
+        // proveedor personalizado) que apunta al mismo endpoint que un motor
+        // por defecto se fusiona en el — evita dos "OpenRouter" y keys en el
+        // motor equivocado.
+        const dup = merged.find((m) => m.endpoint && e.endpoint
+            && m.endpoint.replace(/\/+$/, '').toLowerCase() === e.endpoint.replace(/\/+$/, '').toLowerCase());
+        if (dup) {
+            if (e.apiKey ?? secrets[e.id]) dup.apiKey = e.apiKey ?? secrets[e.id];
+            if (e.model) dup.model = e.model;
+            if (e.enabled) dup.enabled = true;
+            continue;
         }
+        merged.push({ ...e, apiKey: secrets[e.id] });
     }
     return merged;
 }

@@ -8,7 +8,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { AppProvider, useApp } from './store';
 import { useWakeWord } from './wakeword';
 import { speak } from './speech';
-import { detectAction, runAction, previewUrlForAction } from './agent';
+import { detectActions, runAction, previewUrlForAction } from './agent';
 
 /**
  * Shell de la app: sidebar de módulos + cabecera con pestañas + wake word.
@@ -33,18 +33,21 @@ const Shell: React.FC = () => {
         // Si el wake word trae un comando ("Caro, abre YouTube"), el agente de
         // segundo plano lo ejecuta sin que el usuario navegue a ninguna pantalla.
         const cmd = transcript.toLowerCase().replace(state.agentName.toLowerCase(), '').trim();
-        const action = cmd ? detectAction(cmd) : null;
-        if (action) {
-            const prevUrl = previewUrlForAction(action);
-            if (prevUrl) {
-                dispatch({ type: 'set-preview-url', url: prevUrl });
-                dispatch({ type: 'set-tab', tab: 'preview' });
-                void speak(`Abriendo ${action.label}.`, state.ttsVoiceId).catch(() => {});
-                return;
-            }
-            void runAction(action).then((r) => {
-                void speak(r.ok ? `Listo, ejecuté ${action.label}.` : `No pude ${action.label}.`, state.ttsVoiceId).catch(() => {});
-            }).catch(() => {});
+        const actions = cmd ? detectActions(cmd) : [];
+        if (actions.length) {
+            void (async () => {
+                for (const action of actions) {
+                    const prevUrl = action.inApp ? previewUrlForAction(action) : null;
+                    if (prevUrl) {
+                        dispatch({ type: 'set-preview-url', url: prevUrl });
+                        dispatch({ type: 'set-tab', tab: 'preview' });
+                        void speak(`Abriendo ${action.label}.`, state.ttsVoiceId).catch(() => {});
+                        continue;
+                    }
+                    const r = await runAction(action).catch(() => ({ ok: false as const }));
+                    void speak(r.ok ? `Listo, ejecuté ${action.label}.` : `No pude ${action.label}.`, state.ttsVoiceId).catch(() => {});
+                }
+            })();
             return;
         }
         dispatch({ type: 'set-tab', tab: 'chat' });

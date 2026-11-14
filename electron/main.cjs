@@ -87,6 +87,16 @@ function createWindow() {
         return { action: 'deny' };
     });
 
+    // Al minimizar la app la isla dinámica aparece sola (estilo Dynamic Island);
+    // al restaurar la ventana principal la isla se cierra.
+    mainWindow.on('minimize', () => {
+        if (!islandWindow || islandWindow.isDestroyed()) createIslandWindow();
+        else islandWindow.show();
+    });
+    mainWindow.on('restore', () => {
+        if (islandWindow && !islandWindow.isDestroyed()) islandWindow.close();
+    });
+
     // Anti-navegación: el frame principal nunca sale de la app. Sin esto, una
     // redirección/XSS podría cargar una página remota CON acceso a window.joyai.
     mainWindow.webContents.on('will-navigate', (e, url) => {
@@ -138,6 +148,82 @@ ipcMain.handle('win:float', async (_event, payload) => {
     return { ok: true, on: floatMode };
 });
 ipcMain.handle('win:float-status', async () => ({ ok: true, on: floatMode }));
+
+/** Minimiza la ventana principal (para acciones del agente). */
+ipcMain.handle('win:minimize', async () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.minimize();
+        return { ok: true };
+    }
+    return { ok: false, error: 'ventana no disponible' };
+});
+
+/* ── Isla dinámica: ventana compacta independiente, siempre visible ────
+ * A diferencia del "modo flotante" (alwaysOnTop de la ventana completa),
+ * la isla es una ventana aparte y pequeña: se puede minimizar la app
+ * principal y la isla sigue en pantalla, estilo Dynamic Island.
+ * Clic en la isla → restaura/enfoca la ventana principal.
+ */
+let islandWindow = null;
+
+function islandPageUrl() {
+    const base = isDev
+        ? 'http://localhost:3000/'
+        : `file://${path.join(__dirname, '..', 'dist', 'index.html')}`;
+    return `${base}${base.includes('?') ? '&' : '?'}island=1`;
+}
+
+function createIslandWindow() {
+    const { workArea } = screen.getPrimaryDisplay();
+    islandWindow = new BrowserWindow({
+        width: 400,
+        height: 88,
+        x: Math.round(workArea.x + (workArea.width - 400) / 2),
+        y: workArea.y + 20,
+        frame: false,
+        transparent: true,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        fullscreenable: false,
+        skipTaskbar: true,
+        alwaysOnTop: true,
+        hasShadow: false,
+        backgroundColor: '#00000000',
+        webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
+            contextIsolation: true,
+            nodeIntegration: false,
+            sandbox: false,
+            backgroundThrottling: false,
+        },
+    });
+    islandWindow.setAlwaysOnTop(true, 'floating');
+    islandWindow.setVisibleOnAllWorkspaces?.(true);
+    islandWindow.loadURL(islandPageUrl());
+    islandWindow.on('closed', () => { islandWindow = null; });
+}
+
+ipcMain.handle('island:toggle', async () => {
+    if (islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.close();
+        return { ok: true, on: false };
+    }
+    createIslandWindow();
+    return { ok: true, on: true };
+});
+ipcMain.handle('island:status', async () => ({
+    ok: true,
+    on: Boolean(islandWindow && !islandWindow.isDestroyed()),
+}));
+ipcMain.handle('island:restore', async () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.show();
+        mainWindow.focus();
+    }
+    return { ok: true };
+});
 
 ipcMain.on('open-external', (_event, url) => {
     if (typeof url === 'string' && /^https?:\/\//.test(url)) shell.openExternal(url);
@@ -229,7 +315,7 @@ ipcMain.handle('get-system-info', async () => {
  */
 async function handleAiRequest(payload) {
     const endpoint = String(payload?.endpoint ?? '').replace(/\/+$/, '');
-    const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey : '';
+    const apiKey = typeof payload?.apiKey === 'string' ? payload.apiKey.trim() : '';
     const providerType = String(payload?.providerType ?? 'custom');
     const model = String(payload?.model ?? '');
     const messages = Array.isArray(payload?.messages) ? payload.messages : [];
@@ -252,16 +338,25 @@ async function handleAiRequest(payload) {
                 const models = list.map((m) => m?.id ?? m?.name ?? '').filter((s) => typeof s === 'string' && s);
                 return { ok: true, latencyMs, models };
             }
-            // Ollama tambien expone /api/tags en la raiz (sin /v1). Respaldo
-            // para endpoints guardados sin /v1 en instalaciones antiguas.
-            if (providerType === 'ollama') {
+            // Respaldo para servidores locales: Ollama expone /api/tags en la
+            // raiz (sin /v1). Se intenta para cualquier endpoint localhost —
+            // cubre motores guardados como 'custom' o endpoints sin /v1.
+            if (/^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(endpoint)) {
                 const root = endpoint.replace(/\/v1\/?$/, '');
                 const r2 = await fetch(`${root}/api/tags`, { signal: AbortSignal.timeout(4000) });
                 if (r2.ok) {
                     const d2 = await r2.json();
                     const models = (Array.isArray(d2?.models) ? d2.models : [])
                         .map((m) => m?.name ?? m?.model ?? '').filter((s) => typeof s === 'string' && s);
-                    if (models.length) return { ok: true, latencyMs: Date.now() - t0, models };
+                    if (models.length) return { ok: true, latencyMs: Date.now() - t0, models, source: 'ollama' };
+                }
+                // LM Studio / vLLM / OpenAI-compatible en raiz sin /v1
+                const r3 = await fetch(`${root}/models`, { signal: AbortSignal.timeout(4000) });
+                if (r3.ok) {
+                    const d3 = await r3.json();
+                    const list3 = Array.isArray(d3?.data) ? d3.data : Array.isArray(d3?.models) ? d3.models : [];
+                    const models3 = list3.map((m) => m?.id ?? m?.name ?? '').filter((s) => typeof s === 'string' && s);
+                    if (models3.length) return { ok: true, latencyMs: Date.now() - t0, models: models3 };
                 }
             }
             return { ok: false, latencyMs, error: `HTTP ${res.status}` };
@@ -1198,6 +1293,144 @@ ipcMain.handle('models:scan', async (_event, payload) => {
  * El agente puede abrir apps, carpetas, archivos y URLs DEL USUARIO.
  * Nada destructivo: solo 'open' (equivalente a doble clic del usuario).
  */
+/* ── Inventario de aplicaciones instaladas ────────────────────────────────
+ * El agente debe conocer qué apps tiene la máquina SIN que el usuario se las
+ * enseñe en cada conversación. En Windows se lee el registro de
+ * desinstalación (DisplayName + DisplayIcon + InstallLocation) una vez y se
+ * cachea 10 min. El icono suele ser "C:\...\app.exe",0 — se limpia y se
+ * valida con fs.existsSync antes de abrir.
+ */
+let installedAppsCache = { at: 0, apps: [] };
+const APP_SCAN_TTL = 10 * 60 * 1000;
+// Ruido típico del registro que no es "aplicación abrible".
+const APP_JUNK_RE = /knowledge\s*base|update for|security update|hotfix|redistributable|visual c\+\+|\.net (framework|core)|driver|driver update|security essentials|definition update|malwarebytes|intel\(r\)|nvidia (graphics|app)|realtek|windows sdk|application verifier|desktop runtime/i;
+
+async function scanInstalledApps() {
+    if (process.platform !== 'win32') return installedAppsCache.apps;
+    if (installedAppsCache.apps.length && Date.now() - installedAppsCache.at < APP_SCAN_TTL) {
+        return installedAppsCache.apps;
+    }
+    const ps = [
+        "Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',",
+        "'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',",
+        "'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'",
+        '-ErrorAction SilentlyContinue |',
+        "Where-Object { $_.DisplayName -and -not $_.SystemComponent } |",
+        'Select-Object DisplayName,DisplayIcon,InstallLocation |',
+        'ConvertTo-Json -Compress -Depth 2',
+    ].join(' ');
+    const r = await runProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps]);
+    let regApps = [];
+    if (r.code === 0 && r.stdout.trim()) {
+        try {
+            let parsed = JSON.parse(r.stdout);
+            if (!Array.isArray(parsed)) parsed = [parsed];
+            regApps = parsed
+                .filter((a) => a?.DisplayName && !APP_JUNK_RE.test(String(a.DisplayName)))
+                .map((a) => ({
+                    name: String(a.DisplayName).trim(),
+                    icon: a.DisplayIcon ? String(a.DisplayIcon).trim() : '',
+                    location: a.InstallLocation ? String(a.InstallLocation).trim() : '',
+                }))
+                .filter((a) => a.name.length >= 3);
+        } catch { /* JSON inesperado: seguimos solo con accesos directos */ }
+    }
+    // Fusiona registro + accesos directos del menú Inicio, sin duplicar por nombre.
+    const seen = new Set();
+    const merged = [...regApps, ...scanStartMenuShortcuts()].filter((a) => {
+        const key = normAppName(a.name);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+    if (merged.length) installedAppsCache = { at: Date.now(), apps: merged };
+    return installedAppsCache.apps;
+}
+
+/* Segunda fuente: accesos directos del menú Inicio (*.lnk). Atrapa apps
+ * portables y de Microsoft Store que no dejan entrada en Uninstall.
+ * El .lnk se puede abrir directo con shell.openPath (Windows lo ejecuta). */
+function scanStartMenuShortcuts() {
+    if (process.platform !== 'win32') return [];
+    const roots = [
+        path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+        path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+    ];
+    const out = [];
+    const walk = (dir, depth) => {
+        if (depth > 4) return;
+        let entries;
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const e of entries) {
+            const p = path.join(dir, e.name);
+            if (e.isDirectory()) { walk(p, depth + 1); continue; }
+            if (!/\.lnk$/i.test(e.name)) continue;
+            const base = e.name.replace(/\.lnk$/i, '').trim();
+            if (base.length < 3 || APP_JUNK_RE.test(base) || /uninstall|desinstalar|readme|how to|sitio web|website|documentation|ayuda|help/i.test(base)) continue;
+            out.push({ name: base, icon: p, location: '' });
+        }
+    };
+    for (const r of roots) walk(r, 0);
+    return out;
+}
+
+function normAppName(s) {
+    return String(s ?? '')
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// Extrae la ruta .exe de un DisplayIcon: '"C:\app.exe",0' → 'C:\app.exe'.
+function exeFromIcon(icon) {
+    if (!icon) return null;
+    let p = icon.split(',')[0].trim().replace(/^"|"$/g, '');
+    if (!/\.exe$/i.test(p) && !/^[a-z]:[\\/]/i.test(p)) return null;
+    try { p = p.replace(/%[^%]+%/g, (m) => process.env[m.slice(1, -1)] ?? m); } catch { /* noop */ }
+    return fs.existsSync(p) ? p : null;
+}
+
+// Busca una app instalada por nombre difuso → devuelve ruta .exe real o null.
+async function findInstalledExe(query) {
+    const q = normAppName(query);
+    if (!q) return null;
+    const apps = await scanInstalledApps();
+    const scored = apps
+        .map((a) => {
+            const n = normAppName(a.name);
+            let score = 0;
+            if (n === q) score = 100;
+            else if (n.includes(q) || q.includes(n)) score = 60;
+            else {
+                const qTokens = q.split(' ').filter((w) => w.length > 2);
+                const hits = qTokens.filter((w) => n.includes(w)).length;
+                if (hits >= Math.min(2, qTokens.length) && hits > 0) score = 30 + hits * 10;
+            }
+            return { a, score };
+        })
+        .filter((x) => x.score > 0)
+        .sort((x, y) => y.score - x.score);
+    for (const { a } of scored.slice(0, 8)) {
+        const exe = exeFromIcon(a.icon);
+        if (exe) return exe;
+        // Respaldo: InstallLocation + primer .exe visible.
+        if (a.location && fs.existsSync(a.location)) {
+            try {
+                const found = fs.readdirSync(a.location).find((f) => /\.exe$/i.test(f) && !/unins|setup|update|helper|crash/i.test(f));
+                if (found) {
+                    const p = path.join(a.location, found);
+                    if (fs.existsSync(p)) return p;
+                }
+            } catch { /* noop */ }
+        }
+    }
+    return null;
+}
+
+ipcMain.handle('system:apps', async () => {
+    const apps = await scanInstalledApps();
+    return apps.map((a) => ({ name: a.name }));
+});
+
 ipcMain.handle('os:open', async (_event, payload) => {
     const type = String(payload?.type ?? '');
     const target = String(payload?.target ?? '').slice(0, 1000).trim();
@@ -1207,20 +1440,118 @@ ipcMain.handle('os:open', async (_event, payload) => {
             if (!/^https?:\/\//i.test(target)) return { ok: false, error: 'URL inválida' };
             await shell.openExternal(target);
         } else if (type === 'path') {
-            // Solo rutas absolutas existentes; nunca 'del' o comandos.
-            if (!path.isAbsolute(target)) return { ok: false, error: 'se requiere ruta absoluta' };
-            const err = await shell.openPath(target);
+            // Rutas absolutas o '~/carpeta' (= carpeta personal del usuario).
+            const expanded = target.startsWith('~/') || target === '~'
+                ? path.join(os.homedir(), target.slice(1))
+                : target;
+            if (!path.isAbsolute(expanded)) return { ok: false, error: 'se requiere ruta absoluta' };
+            const err = await shell.openPath(expanded);
             if (err) return { ok: false, error: err };
         } else if (type === 'app') {
+            // Nombres especiales: la propia app o carpetas del sistema.
+            const lower = target.toLowerCase();
+            if (['caro ai', 'caroai', 'caro', 'esta app', 'la app', 'joy ai', 'joi'].includes(lower)) {
+                const appDir = app.isPackaged ? path.dirname(process.execPath) : app.getAppPath();
+                const err = await shell.openPath(appDir);
+                if (err) return { ok: false, error: err };
+                return { ok: true };
+            }
+            // Alias de apps comunes: el modelo escribe "navegador brave" o
+            // "el bloc de notas" y aqui se resuelve al ejecutable real.
+            // Sin alias, 'start' acepta el nombre tal cual (App Paths de Windows).
+            const APP_ALIASES = {
+                'navegador': 'chrome', 'browser': 'chrome', 'google': 'chrome', 'google chrome': 'chrome', 'chrome': 'chrome',
+                'brave': 'brave', 'brave browser': 'brave', 'navegador brave': 'brave',
+                'edge': 'msedge', 'microsoft edge': 'msedge', 'navegador edge': 'msedge',
+                'firefox': 'firefox', 'mozilla': 'firefox', 'navegador firefox': 'firefox',
+                'opera': 'opera', 'vivaldi': 'vivaldi', 'navegador opera': 'opera',
+                'explorador': 'explorer', 'explorador de archivos': 'explorer', 'examinador': 'explorer', 'files': 'explorer',
+                'bloc de notas': 'notepad', 'notepad': 'notepad', 'editor': 'notepad',
+                'calculadora': 'calc', 'calc': 'calc', 'calculator': 'calc',
+                'configuracion': 'ms-settings:', 'configuración': 'ms-settings:', 'settings': 'ms-settings:', 'ajustes': 'ms-settings:',
+                'spotify': 'spotify', 'whatsapp': 'whatsapp', 'telegram': 'telegram', 'discord': 'discord',
+                'visual studio code': 'code', 'vscode': 'code', 'vs code': 'code', 'code': 'code',
+                'steam': 'steam', 'epic games': 'epicgameslauncher', 'epic': 'epicgameslauncher',
+                'paint': 'mspaint', 'paint 3d': 'paint3d', 'wordpad': 'write', 'word': 'winword', 'excel': 'excel', 'powerpoint': 'powerpnt',
+                'terminal': 'wt', 'powershell': 'powershell', 'cmd': 'cmd', 'símbolo del sistema': 'cmd',
+                'administrador de tareas': 'taskmgr', 'task manager': 'taskmgr', 'administrador de tareas': 'taskmgr',
+                'reproductor de fotos': 'photos', 'fotos': 'photos', 'photos': 'photos', 'movies': 'movies', 'peliculas': 'movies',
+                'correo': 'outlook', 'outlook': 'outlook', 'gmail': 'chrome',
+                'navegador de escritorio': 'chrome', 'navegador del sistema': 'chrome',
+                'navegador predeterminado': 'chrome', 'mi navegador': 'chrome',
+                'navegador web': 'chrome', 'internet': 'chrome',
+            };
+            // Limpieza: quita palabras de relleno que el modelo agrega.
+            let cleaned = lower
+                .normalize('NFD').replace(/[̀-ͯ]/g, '')
+                .replace(/\b(la app|el programa|la aplicación|app|aplicación|programa|por favor|abre|abrir|ábreme|inicia|ejecuta|lanza|open|el|la|los|las|de|del|mi|mis)\b/g, ' ')
+                .replace(/\s+/g, ' ').trim();
+            if (!cleaned) return { ok: false, error: 'no identifiqué qué aplicación abrir' };
+            const tryAlias = (s) => APP_ALIASES[s] ?? APP_ALIASES[s.replace(/\s+/g, '')];
+            const norm = (s) => s.normalize('NFD').replace(/[̀-ͯ]/g, '');
+            let resolved = tryAlias(cleaned);
+            if (!resolved) {
+                // "navegador de google" → quita el prefijo genérico y reintenta.
+                const stripped = cleaned.replace(/^(navegador|browser|navegador de|browser de|el navegador|el browser)\s+/, '');
+                if (stripped !== cleaned) resolved = tryAlias(stripped);
+            }
+            if (!resolved) {
+                // "abre el bloc de notas": el cleaned quita "de" y rompe el alias;
+                // se reintenta con el texto original menos el verbo inicial.
+                const verbStripped = norm(lower
+                    .replace(/^(?:por favor[,:]?\s+)?(?:abre|abrir|ábreme|inicia|ejecuta|lanza|open)\s+/, '')
+                    .replace(/^(?:el|la|los|las)\s+/, '')
+                    .trim());
+                if (verbStripped && verbStripped !== cleaned) resolved = tryAlias(verbStripped);
+            }
+            resolved = resolved ?? cleaned;
+            // 'ms-settings:' y protocolos los abre el shell directo.
+            if (/^[a-z]+:/.test(resolved)) {
+                await shell.openExternal(resolved);
+                return { ok: true };
+            }
+            // Rutas reales de ejecutables comunes: 'start <nombre>' falla en
+            // silencio si la app no existe; con ruta absoluta si abre o da error.
+            const APP_PATHS = process.platform === 'win32' ? {
+                chrome: [
+                    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+                    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+                ],
+                msedge: [
+                    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+                    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+                ],
+                brave: ['C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe'],
+                firefox: ['C:\\Program Files\\Mozilla Firefox\\firefox.exe'],
+                code: ['C:\\Users\\%USERNAME%\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe'],
+            } : {};
+            const candidates = APP_PATHS[resolved] ?? [];
+            const realExe = candidates.map((p) => p.replace('%USERNAME%', os.userInfo().username)).find((p) => fs.existsSync(p));
+            if (realExe) {
+                const err = await shell.openPath(realExe);
+                if (err) return { ok: false, error: err };
+                return { ok: true };
+            }
+            // Inventario real del registro de Windows: "abre photoshop",
+            // "abre mi app de fotos" → encuentra el .exe instalado aunque el
+            // usuario nunca nos haya dicho el nombre exacto del ejecutable.
+            const invExe = await findInstalledExe(resolved)
+                ?? await findInstalledExe(target);
+            if (invExe) {
+                const err = await shell.openPath(invExe);
+                if (err) return { ok: false, error: err };
+                return { ok: true };
+            }
             // Nombre de app o ejecutable: en Windows 'start', macOS 'open', Linux 'xdg-open'.
+            const launchTarget = resolved;
             if (process.platform === 'win32') {
-                const child = spawn('cmd.exe', ['/d', '/s', '/c', 'start', '""', target], { windowsHide: true, detached: true, stdio: 'ignore' });
+                const child = spawn('cmd.exe', ['/d', '/s', '/c', 'start', '""', launchTarget], { windowsHide: true, detached: true, stdio: 'ignore' });
                 child.unref();
             } else if (process.platform === 'darwin') {
-                const child = spawn('open', ['-a', target], { detached: true, stdio: 'ignore' });
+                const child = spawn('open', ['-a', launchTarget], { detached: true, stdio: 'ignore' });
                 child.unref();
             } else {
-                const child = spawn('xdg-open', [target], { detached: true, stdio: 'ignore' });
+                const child = spawn('xdg-open', [launchTarget], { detached: true, stdio: 'ignore' });
                 child.on('error', () => {});
                 child.unref();
             }
