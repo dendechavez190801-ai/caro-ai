@@ -201,15 +201,19 @@ export const ModelsModule: React.FC = () => {
         const h = await checkEngineHealth(engine);
         setHealth((prev) => ({ ...prev, [engine.id]: h }));
         setCheckingId(null);
-        // Auto-reparacion: si el modelo configurado no esta instalado, se
-        // cambia al primero disponible para que Chat no falle con 404.
-        if (h.ok && h.models.length && !h.models.includes(engine.model)) {
-            // Si el motor de nube no tenia modelo ni estaba activo, lo activamos
-            // directo: el usuario solo pega la key y ya puede platicar.
-            patchEngine(engine.id, {
-                model: h.models[0],
-                ...(!engine.model || !engine.enabled ? { enabled: true } : {}),
-            });
+        // Auto-activación: si el health responde y el motor tiene credencial
+        // (key o endpoint local), se activa solo y se le asigna el primer
+        // modelo si el actual no existe o está vacío. Antes solo se activaba
+        // cuando el modelo NO estaba en la lista — si el modelo default sí
+        // existía, el toggle quedaba apagado y el proveedor no aparecía en Chat.
+        if (h.ok && h.models.length) {
+            const patch: Partial<AIEngineConfig> = {};
+            if (!engine.model || !h.models.includes(engine.model)) patch.model = h.models[0];
+            const hasCreds = isLocalEngine(engine)
+                || !!engine.apiKey
+                || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(engine.endpoint);
+            if (!engine.enabled && hasCreds) patch.enabled = true;
+            if (Object.keys(patch).length) patchEngine(engine.id, patch);
         }
     };
 

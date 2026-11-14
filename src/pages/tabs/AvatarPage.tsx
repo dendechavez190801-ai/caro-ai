@@ -5,7 +5,7 @@ import { chatCompletion } from '../../ai';
 import { getSystemInfo, SystemInfo } from '../../system';
 import { speak, PIPER_VOICES, startMicRecording, stopMicRecording, transcribeBlob } from '../../speech';
 import { AttachMenu, Attachment } from '../../components/AttachMenu';
-import { AGENT_ACTIONS_HINT, APP_CONTEXT, detectActions, runAction, parseAgentActions } from '../../agent';
+import { AGENT_ACTIONS_HINT, APP_CONTEXT, detectActions, runAction, parseAgentActions, memoryContext } from '../../agent';
 import { AGENT_TONES, loadToneIndex } from '../../agentTone';
 import { searchNotes, loadNotes } from '../../vault';
 import iconUrl from '../../assets/icon.jpg';
@@ -103,7 +103,7 @@ export const AvatarPage: React.FC = () => {
                 return;
             }
             const reply = await chatCompletion(engine, [
-                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} es el asistente personal de este usuario dentro de CaRo Ai, ahora con avatar visible.${tonePrompt ? ` ${tonePrompt}` : ''}\n${AGENT_ACTIONS_HINT}${vaultCtx}` },
+                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} es el asistente personal de este usuario dentro de CaRo Ai, ahora con avatar visible.${tonePrompt ? ` ${tonePrompt}` : ''}\n${AGENT_ACTIONS_HINT}${memoryContext()}${vaultCtx}` },
                 ...next.map((m) => ({ role: m.role, content: m.text })),
             ]);
             const parsed = parseAgentActions(reply);

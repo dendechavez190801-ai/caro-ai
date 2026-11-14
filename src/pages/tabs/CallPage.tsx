@@ -4,7 +4,7 @@ import { useApp } from '../../store';
 import { startListening } from '../../voice';
 import { speak, startMicRecording, stopMicRecording, transcribeBlob, PIPER_VOICES, onSpeakLevel } from '../../speech';
 import { chatCompletion } from '../../ai';
-import { APP_CONTEXT, AGENT_ACTIONS_HINT, detectActions, runAction, parseAgentActions } from '../../agent';
+import { APP_CONTEXT, AGENT_ACTIONS_HINT, detectActions, runAction, parseAgentActions, memoryContext } from '../../agent';
 import { AttachMenu, Attachment } from '../../components/AttachMenu';
 import { permEnabled } from '../../permissions';
 
@@ -175,7 +175,7 @@ export const CallPage: React.FC = () => {
         }
         try {
             const reply = await chatCompletion(activeEngine, [
-                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} atiende una LLAMADA DE VOZ con el usuario: responde corto, natural y hablable (1-3 frases), sin markdown ni listas — esto se convierte a voz.\n${AGENT_ACTIONS_HINT}` },
+                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} atiende una LLAMADA DE VOZ con el usuario: responde corto, natural y hablable (1-3 frases), sin markdown ni listas — esto se convierte a voz.\n${AGENT_ACTIONS_HINT}${memoryContext()}` },
                 ...next,
             ]);
             const parsed = parseAgentActions(reply);

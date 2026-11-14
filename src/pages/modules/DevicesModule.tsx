@@ -33,7 +33,7 @@ export const DevicesModule: React.FC = () => {
     const [info, setInfo] = useState<SystemInfo | null>(null);
     const [code] = useState(getLinkCode);
     const [copied, setCopied] = useState(false);
-    const [devices] = useState<LinkedDevice[]>(loadLinkedDevices);
+    const [devices, setDevices] = useState<LinkedDevice[]>(loadLinkedDevices);
     const [sshDevices, setSshDevices] = useState<SshDevice[]>(loadSshDevices);
     const [sshForm, setSshForm] = useState({ name: '', user: '', host: '', port: '22' });
     const [sshCmd, setSshCmd] = useState<Record<string, string>>({});
@@ -44,7 +44,11 @@ export const DevicesModule: React.FC = () => {
     useEffect(() => {
         let on = true;
         getSystemInfo().then((s) => { if (on) setInfo(s); }).catch(() => {});
-        return () => { on = false; };
+        // La lista de vinculados puede cambiar desde Pantalla en la misma
+        // sesión: se recarga al enfocar la ventana.
+        const refresh = () => setDevices(loadLinkedDevices());
+        window.addEventListener('focus', refresh);
+        return () => { on = false; window.removeEventListener('focus', refresh); };
     }, []);
 
     const localIp = info?.networkIp ?? '—';

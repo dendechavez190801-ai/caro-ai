@@ -5,7 +5,7 @@ import { chatCompletion, checkEngineHealth } from '../../ai';
 import { startMicRecording, stopMicRecording, transcribeBlob } from '../../speech';
 import { ChatSession, saveSession, sessionTitle, loadSessions } from '../../chats';
 import { createNote, loadNotes, saveNotes, downloadText, searchNotes } from '../../vault';
-import { detectActions, runAction, AGENT_ACTIONS_HINT, APP_CONTEXT, parseAgentActions, AgentAction, previewUrlForAction } from '../../agent';
+import { detectActions, runAction, AGENT_ACTIONS_HINT, APP_CONTEXT, memoryContext, parseAgentActions, AgentAction, previewUrlForAction } from '../../agent';
 import { AttachMenu, Attachment } from '../../components/AttachMenu';
 import { AGENT_TONES, loadToneIndex } from '../../agentTone';
 
@@ -191,7 +191,7 @@ export const ChatPage: React.FC = () => {
                 : '';
             const tonePrompt = AGENT_TONES[loadToneIndex()]?.prompt ?? '';
             const reply = await chatCompletion(activeEngine, [
-                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} es el asistente personal de este usuario dentro de CaRo Ai.${tonePrompt ? ` ${tonePrompt}` : ''}\n${AGENT_ACTIONS_HINT}${vaultCtx}` },
+                { role: 'system', content: `${APP_CONTEXT}\n\n${state.agentName} es el asistente personal de este usuario dentro de CaRo Ai.${tonePrompt ? ` ${tonePrompt}` : ''}\n${AGENT_ACTIONS_HINT}${memoryContext()}${vaultCtx}` },
                 ...next.map((m) => ({ role: m.role, content: m.text })),
             ]);
             // Tool-calling nivel 2: la IA propone acciones; el usuario confirma.

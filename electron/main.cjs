@@ -760,7 +760,17 @@ ipcMain.handle('speech:stt', async (_event, payload) => {
 const SSH_HOST_RE = /^[a-zA-Z0-9][a-zA-Z0-9.\-]{0,252}$/;
 const SSH_USER_RE = /^[a-zA-Z0-9_][a-zA-Z0-9_.\-]{0,31}$/;
 
-ipcMain.handle('device:ssh', async (_event, payload) => {
+/* Solo las ventanas propias de CaRo Ai (principal + isla) pueden invocar
+ * acciones sensibles. Un webview/secuestrador que lograra window.joyai desde
+ * otro webContents queda bloqueado aquí, no solo en el renderer. */
+function trustedSender(event) {
+    const wc = event?.sender;
+    return wc === mainWindow?.webContents || wc === islandWindow?.webContents;
+}
+const untrusted = { ok: false, error: 'IPC no autorizado: origen no permitido' };
+
+ipcMain.handle('device:ssh', async (event, payload) => {
+    if (!trustedSender(event)) return untrusted;
     const host = String(payload?.host ?? '').trim();
     const user = String(payload?.user ?? '').trim();
     const port = Number(payload?.port) || 22;
@@ -859,6 +869,7 @@ ipcMain.handle('media:probe', async (_event, payload) => {
 
 /** Convierte con preset cerrado. Devuelve la ruta del archivo generado. */
 ipcMain.handle('media:convert', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const ffmpeg = FFMPEG_EXE();
     const file = typeof payload?.path === 'string' ? payload.path : '';
     const preset = MEDIA_PRESETS[String(payload?.preset ?? '')] ?? IMAGE_PRESETS[String(payload?.preset ?? '')];
@@ -960,6 +971,7 @@ ipcMain.handle('ai:request', async (_event, payload) => {
  * timeout 15 s y salida truncada a 64 KB para no colgar la UI.
  */
 ipcMain.handle('shell:exec', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const command = typeof payload?.command === 'string' ? payload.command.slice(0, 2000) : '';
     if (!command.trim()) return { ok: false, error: 'comando vacío' };
     const isWin = process.platform === 'win32';
@@ -1032,6 +1044,7 @@ ipcMain.handle('control:status', async () => {
 });
 
 ipcMain.handle('control:mouseMove', async (_e, p) => {
+    if (!trustedSender(_e)) return untrusted;
     const n = getNut();
     if (!n) return { ok: false, error: 'no disponible' };
     const x = Math.round(Number(p?.x)), y = Math.round(Number(p?.y));
@@ -1041,6 +1054,7 @@ ipcMain.handle('control:mouseMove', async (_e, p) => {
 });
 
 ipcMain.handle('control:mouseClick', async (_e, p) => {
+    if (!trustedSender(_e)) return untrusted;
     const n = getNut();
     if (!n) return { ok: false, error: 'no disponible' };
     const btn = p?.button === 'right' ? n.Button.RIGHT : p?.button === 'middle' ? n.Button.MIDDLE : n.Button.LEFT;
@@ -1049,6 +1063,7 @@ ipcMain.handle('control:mouseClick', async (_e, p) => {
 });
 
 ipcMain.handle('control:type', async (_e, p) => {
+    if (!trustedSender(_e)) return untrusted;
     const n = getNut();
     if (!n) return { ok: false, error: 'no disponible' };
     const text = String(p?.text ?? '').slice(0, 2000);
@@ -1058,6 +1073,7 @@ ipcMain.handle('control:type', async (_e, p) => {
 });
 
 ipcMain.handle('control:key', async (_e, p) => {
+    if (!trustedSender(_e)) return untrusted;
     const n = getNut();
     if (!n) return { ok: false, error: 'no disponible' };
     const keyName = String(p?.key ?? '').toUpperCase();
@@ -1464,6 +1480,7 @@ ipcMain.handle('system:apps', async () => {
 });
 
 ipcMain.handle('os:open', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const type = String(payload?.type ?? '');
     const target = String(payload?.target ?? '').slice(0, 1000).trim();
     if (!target) return { ok: false, error: 'objetivo vacío' };
@@ -1784,6 +1801,7 @@ ipcMain.handle('update:pickProject', async () => {
 });
 
 ipcMain.handle('update:submit', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const cfg = updateConfig();
     const projectDir = cfg.projectDir;
     if (!projectDir || !fs.existsSync(projectDir)) {
@@ -1835,6 +1853,7 @@ ipcMain.handle('update:submit', async (_event, payload) => {
 });
 
 ipcMain.handle('update:apply', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const id = String(payload?.id ?? '');
     if (!/^u-[a-z0-9-]+$/i.test(id)) return { ok: false, error: 'id inválido' };
     const stageDir = path.join(UPDATE_STAGING(), id);
@@ -1885,6 +1904,7 @@ ipcMain.handle('update:apply', async (_event, payload) => {
 });
 
 ipcMain.handle('update:rollback', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const id = String(payload?.id ?? '');
     const versions = updateListVersions();
     const target = id
@@ -1924,6 +1944,7 @@ ipcMain.handle('update:rollback', async (_event, payload) => {
 });
 
 ipcMain.handle('update:export', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const versions = updateListVersions();
     const target = payload?.id ? versions.find((v) => v.id === payload.id) : versions[0];
     if (!target) return { ok: false, error: 'no hay actualizaciones para exportar' };
@@ -1951,6 +1972,7 @@ ipcMain.handle('update:export', async (_event, payload) => {
 /* Visor de archivos de una actualización: devuelve la lista y el contenido
  * de cada archivo staged para que el usuario pueda auditar qué se aplicó. */
 ipcMain.handle('update:view', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const id = String(payload?.id ?? '');
     if (!/^u-[a-z0-9-]+$/i.test(id)) return { ok: false, error: 'id inválido' };
     const stageDir = path.join(UPDATE_STAGING(), id);
@@ -1974,6 +1996,7 @@ ipcMain.handle('update:view', async (_event, payload) => {
 /* Abre en el explorador del SO la carpeta independiente de una actualización
  * (staging: manifest + archivos propuestos + respaldos prev/). */
 ipcMain.handle('update:openDir', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const id = String(payload?.id ?? '');
     if (!/^u-[a-z0-9-]+$/i.test(id)) return { ok: false, error: 'id inválido' };
     const stageDir = path.join(UPDATE_STAGING(), id);

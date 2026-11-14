@@ -328,6 +328,21 @@ function detectSingleAction(text: string): AgentAction | null {
     return null;
 }
 
+/** Memoria del usuario que el modelo debe conocer: skills activas y repos
+ *  configurados en Memoria y Personalidad (localStorage, por usuario). */
+export function memoryContext(): string {
+    try {
+        const skills = JSON.parse(localStorage.getItem('caroai.skills.v1') ?? '[]') as { name?: string; desc?: string; enabled?: boolean }[];
+        const repos = JSON.parse(localStorage.getItem('caroai.repos.v1') ?? '[]') as string[];
+        const parts: string[] = [];
+        const on = (Array.isArray(skills) ? skills : []).filter((s) => s?.enabled && s?.name);
+        if (on.length) parts.push(`Skills activas del usuario: ${on.map((s) => `${s!.name} — ${s!.desc ?? ''}`).join('; ')}.`);
+        const rs = (Array.isArray(repos) ? repos : []).filter((r) => typeof r === 'string' && r.trim());
+        if (rs.length) parts.push(`Repositorios del usuario: ${rs.join(', ')}.`);
+        return parts.length ? `\n${parts.join(' ')}` : '';
+    } catch { return ''; }
+}
+
 /** Ejecuta la acción vía IPC del sistema. 'shell' usa la terminal real. */
 export async function runAction(a: AgentAction): Promise<{ ok: boolean; error?: string; output?: string }> {
     const joyai = window.joyai;
