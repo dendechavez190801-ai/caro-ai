@@ -1,0 +1,179 @@
+@import "tailwindcss";
+
+/*
+ * Tokens de tema. Los escribe el store (src/store.tsx) en el <html> segun
+ * el acento y la tipografia elegidos por el usuario.
+ */
+:root {
+    --accent: 255 255 255;
+    --accent-rgb: 255 255 255;
+    --accent-hex: #ffffff;
+    --accent-contrast: 10 10 10;
+    --font-family: 'Inter', system-ui, sans-serif;
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-family);
+    background: #0a0a0a;
+    color: #e3e3e3;
+    overflow-x: hidden;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #444;
+}
+
+.glass-panel {
+    background: rgba(26, 26, 26, 0.8);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 16px;
+}
+
+.neon-text {
+    text-shadow: 0 0 10px rgb(var(--accent) / 0.5);
+}
+
+.neon-border {
+    box-shadow: 0 0 15px rgb(var(--accent) / 0.3);
+}
+
+.avatar-pulse {
+    animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.7;
+        transform: scale(1.05);
+    }
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.spinner {
+    animation: spin 1s linear infinite;
+}
+
+.fade-in {
+    animation: fadeIn 0.3s ease-in-out;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.slide-in-right {
+    animation: slideInRight 0.3s ease-out;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.animate-fade-in {
+    animation: fade-in 0.25s ease-out both;
+}
+
+@keyframes fade-in {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Barra de progreso animada (vista previa de Apariencia). */
+.appearance-progress {
+    animation: progressSlide 2.4s ease-in-out infinite;
+}
+
+@keyframes progressSlide {
+    0% { transform: translateX(-100%); }
+    60%, 100% { transform: translateX(400%); }
+}
+
+/* Ecualizador de la llamada: barras que oscilan suavemente. */
+@keyframes eq {
+    0%, 100% { transform: scaleY(0.35); }
+    50% { transform: scaleY(1); }
+}
+.eq-bar { transform-origin: bottom; }
+
+/* Nebulosa del visualizador "holo": blobs a la deriva. */
+@keyframes drift1 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(14%, -10%) scale(1.15); }
+    66% { transform: translate(-8%, 12%) scale(0.9); }
+}
+@keyframes drift2 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(-16%, 8%) scale(1.2); }
+}
+@keyframes drift3 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(10%, -14%) scale(0.85); }
+}
+
+/* Fondo ambiental: dos glows con el color de acento. */
+.app-backdrop {
+    background:
+        radial-gradient(60rem 40rem at 15% -10%, rgb(var(--accent-rgb) / 0.12), transparent 60%),
+        radial-gradient(50rem 35rem at 110% 110%, rgb(var(--accent-rgb) / 0.09), transparent 60%),
+        var(--bg-base, #0a0a0a);
+}
+

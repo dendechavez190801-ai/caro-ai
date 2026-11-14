@@ -1,0 +1,119 @@
+# CaRo Ai — build multiplataforma para GitHub Releases (B6/B7).
+# Se dispara al publicar un tag v* (ej. v1.0.0) o manualmente (workflow_dispatch).
+# Sube los artefactos al Release automáticamente con softprops/action-gh-release.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # junction release-dist → dist (electron-builder.yml lo espera)
+      - name: Enlazar dist para electron-builder
+        shell: pwsh
+        run: |
+          if (Test-Path release-dist) { Remove-Item release-dist -Force }
+          New-Item -ItemType Junction -Path release-dist -Target (Resolve-Path dist) | Out-Null
+      - name: Empaquetar Windows
+        run: npx electron-builder --win --publish never
+      # electron-builder escribe fuera del workspace (../joy-ai-build/release);
+      # se copia dentro para que upload-artifact lo alcance.
+      - name: Recolectar artefactos
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          Copy-Item "../joy-ai-build/release/*.exe","../joy-ai-build/release/*.blockmap","../joy-ai-build/release/latest.yml" out/ -ErrorAction SilentlyContinue
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+          if-no-files-found: error
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run build
+      - run: npx cap sync android
+      # Firma release: el .keystore va en base64 en secrets (binario no cabe
+      # en secrets); las passwords también. Ver _ai_docs/07_INSTALACIONES.md.
+      - name: Restaurar keystore desde secrets
+        working-directory: android
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > app/keystore.jks
+          cat > keystore.properties <<EOF
+          storeFile=keystore.jks
+          storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
+          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
+          EOF
+      - name: APK release firmado
+        working-directory: android
+        run: ./gradlew assembleRelease --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Enlazar dist para electron-builder
+        run: |
+          rm -rf release-dist
+          ln -s "$(pwd)/dist" release-dist
+      # Sin certificado Apple: build sin firma (el usuario abre con
+      # clic derecho → Abrir o xattr -dr com.apple.quarantine, ver Decisión 6)
+      - name: Empaquetar macOS (sin firma)
+        run: npx electron-builder --mac --publish never -c.mac.identity=null
+      - name: Recolectar artefactos
+        run: |
+          mkdir -p out
+          cp ../joy-ai-build/release/*.dmg ../joy-ai-build/release/*.zip ../joy-ai-build/release/latest-mac.yml out/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: out/*
+          if-no-files-found: error
+
+  release:
+    needs: [windows, android, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publicar en GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**
+          generate_release_notes: true

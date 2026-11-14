@@ -1,0 +1,41 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+.DS_Store
+Thumbs.db
+
+# Capacitor
+/android/
+/ios/
+/.capacitor/
+capacitor.config.json
+
+# Electron
+release/
+out/
+
+# Python backend
+backend/__pycache__/
+backend/.venv/
+backend/*.pyc
+.env
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Build output
+release-dist/
+
+# Docs internos (solo local, no publico)
+_ai_docs/
+LEEME.md
+PLAN.md

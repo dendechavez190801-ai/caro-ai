@@ -1,0 +1,35 @@
+# Empaquetado de CaRo Ai con electron-builder.
+# dist se genera fuera de la bóveda (joy-ai-build/dist) y se expone aquí
+# mediante el junction ./release-dist.
+appId: com.caroai.app
+productName: CaRo Ai
+directories:
+  output: ../../../joy-ai-build/release
+files:
+  - from: release-dist
+    to: dist
+  - from: electron
+    to: electron
+  - package.json
+# Motores de voz locales (Piper + whisper + voces ES) dentro del paquete.
+extraResources:
+  - from: ../../../joy-ai-build/engines
+    to: engines
+win:
+  icon: build/icon.ico
+  target:
+    - portable
+    - nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: CaRo-Ai-${version}-setup.${ext}
+portable:
+  artifactName: CaRo-Ai-${version}-portable.${ext}
+
+# Feed del auto-updater (electron-updater). Placeholder hasta crear el repo
+# público de releases (B6): ajustar owner/repo con los datos reales de GitHub.
+publish:
+  provider: github
+  owner: REEMPLAZAR-OWNER
+  repo: REEMPLAZAR-REPO
