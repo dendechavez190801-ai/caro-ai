@@ -558,6 +558,7 @@ ipcMain.handle('speech:voices', async () => {
  * Voces ES: ef_dora (F), em_alex (M), em_santa (M).
  */
 ipcMain.handle('speech:tts-kokoro', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const text = String(payload?.text ?? '').slice(0, 4000);
     const voice = KOKORO_VOICES.has(String(payload?.voice)) ? String(payload.voice) : 'ef_dora';
     if (!text.trim()) return { ok: false, error: 'texto vacio' };
@@ -592,6 +593,7 @@ ipcMain.handle('speech:tts-kokoro', async (_event, payload) => {
  *  `pitch` (0.5–2.0) aplica desplazamiento de tono con ffmpeg
  *  (asetrate+atempo) para voces de niño/niña sobre voces adultas base. */
 ipcMain.handle('speech:tts', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const text = String(payload?.text ?? '').slice(0, 4000);
     const voiceFile = String(payload?.voice ?? 'es_ES-davefx-medium.onnx');
     const pitch = Math.min(2, Math.max(0.5, Number(payload?.pitch) || 1));
@@ -657,6 +659,7 @@ const CLONE_SAMPLE_EXTS = new Set(['.wav', '.webm', '.ogg', '.mp3', '.m4a', '.fl
 
 /** Guarda la muestra de voz del usuario (dataURL/base64) en userData. */
 ipcMain.handle('speech:clone-sample-save', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     try {
         const ext = CLONE_SAMPLE_EXTS.has(String(payload?.ext ?? '').toLowerCase())
             ? String(payload.ext).toLowerCase() : '.wav';
@@ -672,7 +675,8 @@ ipcMain.handle('speech:clone-sample-save', async (_event, payload) => {
     }
 });
 
-ipcMain.handle('speech:clone-sample-info', async () => {
+ipcMain.handle('speech:clone-sample-info', async (event) => {
+    if (!trustedSender(event)) return untrusted;
     try {
         const dir = CLONE_SAMPLE_DIR();
         const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => CLONE_SAMPLE_EXTS.has(path.extname(f).toLowerCase())) : [];
@@ -688,6 +692,7 @@ ipcMain.handle('speech:clone-sample-info', async () => {
  * tardar decenas de segundos; el renderer debe mostrar "generando…".
  */
 ipcMain.handle('speech:clone', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const text = String(payload?.text ?? '').slice(0, 4000);
     const refPath = String(payload?.refPath ?? '');
     if (!text.trim()) return { ok: false, error: 'texto vacio' };
@@ -725,6 +730,7 @@ ipcMain.handle('speech:clone', async (_event, payload) => {
 
 /** STT local con whisper.cpp: recibe WAV en base64, devuelve el texto. */
 ipcMain.handle('speech:stt', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     const wavBase64 = String(payload?.wavBase64 ?? '');
     const lang = String(payload?.lang ?? 'es');
     if (!wavBase64) return { ok: false, error: 'audio vacio' };
@@ -914,6 +920,7 @@ function writeSecretsStore(map) {
 }
 
 ipcMain.handle('secrets:save', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     if (!(await safeStorage.isAsyncEncryptionAvailable())) return { ok: false, error: 'cifrado no disponible en este SO' };
     const entries = payload?.entries && typeof payload.entries === 'object' ? payload.entries : {};
     const store = readSecretsStore();
@@ -932,7 +939,8 @@ ipcMain.handle('secrets:save', async (_event, payload) => {
     }
 });
 
-ipcMain.handle('secrets:load', async () => {
+ipcMain.handle('secrets:load', async (event) => {
+    if (!trustedSender(event)) return untrusted;
     if (!(await safeStorage.isAsyncEncryptionAvailable())) return {};
     const store = readSecretsStore();
     const out = {};
@@ -958,6 +966,7 @@ ipcMain.handle('session:clear', async (_event, payload) => {
 });
 
 ipcMain.handle('ai:request', async (_event, payload) => {
+    if (!trustedSender(_event)) return untrusted;
     try {
         return await handleAiRequest(payload ?? {});
     } catch (err) {
