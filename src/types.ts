@@ -89,6 +89,8 @@ export interface AIEngineConfig {
     apiKey?: string;
     model: string;
     enabled: boolean;
+    /** true = el usuario lo apagó a propósito; la auto-activación por key no lo revive. */
+    userDisabled?: boolean;
 }
 
 export interface AppSettings {

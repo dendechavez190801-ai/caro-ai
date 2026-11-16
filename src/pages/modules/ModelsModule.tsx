@@ -70,7 +70,7 @@ const EngineCard: React.FC<EngineCardProps> = ({ engine, onPatch, health, checki
         <Card className="flex flex-col gap-2.5">
             <div className="flex items-center justify-between gap-2">
                 <span className="text-sm font-semibold text-white truncate">{engine.name}</span>
-                <Toggle checked={engine.enabled} onChange={(v) => onPatch({ enabled: v })} />
+                <Toggle checked={engine.enabled} onChange={(v) => onPatch({ enabled: v, userDisabled: !v })} />
             </div>
             <label className="flex flex-col gap-1">
                 <span className="text-[10px] uppercase tracking-widest text-neutral-500">Modelo</span>
@@ -212,7 +212,7 @@ export const ModelsModule: React.FC = () => {
             const hasCreds = isLocalEngine(engine)
                 || !!engine.apiKey
                 || /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])/.test(engine.endpoint);
-            if (!engine.enabled && hasCreds) patch.enabled = true;
+            if (!engine.enabled && !engine.userDisabled && hasCreds) patch.enabled = true;
             if (Object.keys(patch).length) patchEngine(engine.id, patch);
         }
     };

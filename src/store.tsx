@@ -210,6 +210,7 @@ export type AppAction =
     | { type: 'set-clone-sample'; sample: CloneSample | null }
     | { type: 'set-preview-url'; url: string | null }
     | { type: 'set-engine-keys'; keys: Record<string, string> }
+    | { type: 'enable-keyed-engines'; ids: string[] }
     | { type: 'hydrate'; state: Partial<AppState> };
 
 function reducer(state: AppState, action: AppAction): AppState {
@@ -269,6 +270,18 @@ function reducer(state: AppState, action: AppAction): AppState {
                 ...state,
                 engines: state.engines.map((e) =>
                     action.keys[e.id] ? { ...e, apiKey: action.keys[e.id] } : e,
+                ),
+            };
+        case 'enable-keyed-engines':
+            // Motores con API key guardada aparecen usable en Chat sin que el
+            // usuario tenga que abrir Modelos a reactivarlos. Si el usuario lo
+            // apagó a mano (userDisabled) se respeta.
+            return {
+                ...state,
+                engines: state.engines.map((e) =>
+                    action.ids.includes(e.id) && !e.enabled && !e.userDisabled && e.apiKey
+                        ? { ...e, enabled: true, userDisabled: false }
+                        : e,
                 ),
             };
         case 'hydrate':
@@ -375,7 +388,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             for (const [k, v] of Object.entries(map)) {
                 if (typeof v === 'string' && v) keys[k] = v;
             }
-            if (Object.keys(keys).length > 0) dispatch({ type: 'set-engine-keys', keys });
+            if (Object.keys(keys).length > 0) {
+                dispatch({ type: 'set-engine-keys', keys });
+                dispatch({ type: 'enable-keyed-engines', ids: Object.keys(keys) });
+            }
         }).catch(() => { /* sin cifrado disponible */ });
         return () => { on = false; };
     }, []);
